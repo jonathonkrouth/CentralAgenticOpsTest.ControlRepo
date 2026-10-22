@@ -1,1 +1,6 @@
 .github/workflows/*.lock.yml linguist-generated=true
+# gh-aw embeds workflow source text in lock files; CRLF checkouts on Windows produce locks that differ from CI.
+.github/workflows/**/*.md text eol=lf
+.github/workflows/**/*.yml text eol=lf
+.github/workflows/**/*.json text eol=lf
+.github/workflows/**/*.mjs text eol=lf
