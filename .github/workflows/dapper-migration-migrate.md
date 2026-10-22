@@ -36,10 +36,10 @@ on:
     actions: read
 
 checkout:
-  - repository: ${{ (inputs.safe_output_mode || 'review') == 'review' && (inputs.safe_output_repo || github.repository) || inputs.target_repo }}
-    github-token: ${{ vars.GH_AW_GITHUB_AUTH_MODE == 'pat' && secrets[fromJSON(vars.GH_AW_GITHUB_READ_PAT_REPOSITORIES || '{}')[(inputs.safe_output_mode || 'review') == 'review' && (inputs.safe_output_repo || github.repository) || inputs.target_repo]] || vars.GH_AW_GITHUB_AUTH_MODE != 'pat' && secrets.GH_AW_GITHUB_READ_PAT || vars.GH_AW_GITHUB_AUTH_MODE != 'pat' && secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
-    fetch-depth: 0
-    fetch: ["*"]
+  # The workspace root is never the target repository: gh-aw keys its checkout manifest by repository,
+  # so a second target checkout would hide `target/` from create_pull_request (last entry wins).
+  - repository: ${{ (inputs.safe_output_mode || 'review') == 'review' && (inputs.safe_output_repo || github.repository) || github.repository }}
+    github-token: ${{ vars.GH_AW_GITHUB_AUTH_MODE == 'pat' && secrets[fromJSON(vars.GH_AW_GITHUB_READ_PAT_REPOSITORIES || '{}')[(inputs.safe_output_mode || 'review') == 'review' && (inputs.safe_output_repo || github.repository) || github.repository]] || vars.GH_AW_GITHUB_AUTH_MODE != 'pat' && secrets.GH_AW_GITHUB_READ_PAT || vars.GH_AW_GITHUB_AUTH_MODE != 'pat' && secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
     current: true
   - repository: ${{ inputs.target_repo }}
     github-token: ${{ vars.GH_AW_GITHUB_AUTH_MODE == 'pat' && secrets[fromJSON(vars.GH_AW_GITHUB_READ_PAT_REPOSITORIES || '{}')[inputs.target_repo]] || vars.GH_AW_GITHUB_AUTH_MODE != 'pat' && secrets.GH_AW_GITHUB_READ_PAT || vars.GH_AW_GITHUB_AUTH_MODE != 'pat' && secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
@@ -162,7 +162,7 @@ Read `/tmp/gh-aw/agent/control-precompute.json` first and follow the worker rule
 
 The campaign covers only `jonathonkrouth/CentralAgenticOpsTest.Repo1`, `jonathonkrouth/CentralAgenticOpsTest.Repo2`, and `jonathonkrouth/CentralAgenticOpsTest.Repo3`. When `TARGET_REPO` is any other repository, call `noop` with `not a Dapper Migration target` and stop.
 
-`target/` is the authoritative target snapshot. In `live` mode the workspace root is also the target checkout and is the only place you may edit. In `review` and `debug` modes the workspace root is the review repository; never edit it.
+`target/` is the authoritative target checkout and the only place you may edit, build, test, branch, or commit, in every mode. The workspace root is the control or review repository; never edit it.
 
 ## Duplicate Detection
 
@@ -207,7 +207,7 @@ Make the smallest complete change that replaces eligible ADO.NET command executi
 
 ## Validation
 
-Run validation in `target/` for review and in the workspace root for live. Capture exact commands and outcomes.
+Run validation in `target/`. Capture exact commands and outcomes.
 
 1. Record `dotnet --info` (SDK version only) and the solution file used (`*.slnx` or `*.sln`).
 2. Before editing, run `dotnet restore`, `dotnet build --no-restore`, and `dotnet test --no-build` once to record the baseline.
@@ -220,7 +220,7 @@ Report honestly. List passed, failed, skipped, and not-run tests with counts fro
 
 In `live` mode, when edits exist and validation shows no new failures:
 
-1. Commit the changes in the workspace root on the branch `dapper-migration/ado-net-to-dapper`.
+1. In `target/`, create the branch `dapper-migration/ado-net-to-dapper` from the default branch and commit the changes there (`git -C target checkout -b dapper-migration/ado-net-to-dapper`, then `git -C target add` and `git -C target commit`). Do not push; the safe-output handler pushes.
 2. Call `create_pull_request` once with branch `dapper-migration/ado-net-to-dapper` and the unprefixed title `Migrate ADO.NET data access to Dapper`. The configured title prefix is added automatically.
 3. Never merge the pull request, enable auto-merge, push to the default branch, or create issues in the target repository.
 
@@ -246,7 +246,7 @@ Put every Markdown table inside a `<details>` block. Do not use emoji severity m
 
 ## Memory
 
-After a terminal decision, write `$GH_AW_MEMORY_DIR/targets/OWNER__REPOSITORY.json` (normally under `/tmp/gh-aw/repo-memory/default/`) with only: `target_repo`, `status` (`proposed`, `review-proposed`, `no-eligible-code`, `duplicate`, or `incomplete`), `default_branch_sha`, `pull_request` (number or `null`), `safe_output_mode`, and `updated_at` (ISO 8601 UTC). Never store source, diffs, logs, prompts, or credentials. Memory is advisory; always recheck current evidence.
+After a terminal decision, write `$GH_AW_MEMORY_DIR/targets/OWNER__REPOSITORY.json` (normally under `/tmp/gh-aw/repo-memory/default/`), replacing the file when it already exists (for example with a shell redirect rather than a create-only file tool), with only: `target_repo`, `status` (`proposed`, `review-proposed`, `no-eligible-code`, `duplicate`, or `incomplete`), `default_branch_sha`, `pull_request` (number or `null`), `safe_output_mode`, and `updated_at` (ISO 8601 UTC). Never store source, diffs, logs, prompts, or credentials. Memory is advisory; always recheck current evidence.
 
 ## No-op and Incomplete
 
