@@ -40,17 +40,20 @@ worker run waits for a human to start a new orchestrator run.
 
 - Reads CAO precompute and the `memory/dapper-migration` branch.
 - Skips repositories outside the target list, repositories that already have an
-  open or closed-unmerged PR from `dapper-migration/ado-net-to-dapper`, and
-  repositories that the worker last recorded as having no eligible code at the
-  same default-branch SHA.
+  open PR from `dapper-migration/ado-net-to-dapper`, repositories where that
+  branch still exists after a closed-unmerged PR, and repositories that the
+  worker last recorded as having no eligible code at the same default-branch SHA.
+  Closing a migration PR **and deleting its branch** makes the repository
+  eligible for a fresh attempt.
 - Dispatches `dapper-migration-migrate` at most once per target, mode, and run,
   within `max_repos` (default `1`).
 
 ### Worker
 
 1. **Duplicate check.** Returns `noop` when the target already has an open
-   migration PR, a closed-unmerged migration PR, or a stale
-   `dapper-migration/ado-net-to-dapper` branch. In review mode it also returns
+   migration PR, or when the `dapper-migration/ado-net-to-dapper` branch exists
+   without an open PR. A closed-unmerged PR whose branch was deleted does not
+   block a new attempt. In review mode it also returns
    `noop` when an open review issue already covers the target.
 2. **Eligibility.** Returns `noop` when no production ADO.NET command or reader
    code remains. Out-of-scope patterns stay unchanged and are listed, including

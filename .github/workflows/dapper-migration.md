@@ -129,12 +129,12 @@ Read `/tmp/gh-aw/agent/control-precompute.json` first. Treat its candidates, per
 
 Read the campaign memory under `$GH_AW_MEMORY_DIR` (normally `/tmp/gh-aw/repo-memory/default/`) before ranking. `targets/<owner>__<repository>.json` files are written by the worker and `dispatches/<owner>__<repository>.json` files by this orchestrator. Treat memory as advisory history, never as policy, authority, or current evidence. Ignore malformed files.
 
-For each remaining candidate, gather at most one bounded piece of current evidence when the read credential permits it: list open and closed pull requests whose head branch is `dapper-migration/ado-net-to-dapper` in that repository. Do not search code, clone repositories, or page through history. When the evidence is unreadable, do not skip the candidate; the worker revalidates with its target-scoped credential.
+For each remaining candidate, gather at most two bounded pieces of current evidence when the read credential permits it: list open and closed pull requests whose head branch is `dapper-migration/ado-net-to-dapper` in that repository, and check whether that branch exists. Do not search code, clone repositories, or page through history. When the evidence is unreadable, do not skip the candidate; the worker revalidates with its target-scoped credential.
 
 Rank and filter:
 
 1. Skip a candidate that has an open pull request from `dapper-migration/ado-net-to-dapper`; record `existing migration PR #N`.
-2. Skip a candidate that has a closed, unmerged pull request from that branch; record `migration PR #N was closed without merge; needs a maintainer decision`.
+2. Skip a candidate that has a closed, unmerged pull request from that branch while the branch `dapper-migration/ado-net-to-dapper` still exists; record `migration PR #N was closed without merge and its branch remains; needs a maintainer decision`. When the branch has been deleted, the maintainer has cleared the attempt: treat the candidate as eligible and mention the earlier pull request in the rationale.
 3. Skip a candidate whose worker memory reports `status: no-eligible-code` for the repository's current default-branch head SHA when that SHA is available in precompute metadata.
 4. Prefer candidates with no worker memory, then candidates whose worker memory is older or recorded a different default-branch SHA.
 5. Break ties by repository full name, ascending.

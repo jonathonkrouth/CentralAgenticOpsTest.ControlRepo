@@ -176,8 +176,8 @@ Before analyzing code, check for existing work in `TARGET_REPO`. All of these ar
 Then decide:
 
 - An open migration pull request exists: call `noop` with `existing migration PR #N`.
-- A closed, unmerged migration pull request exists: call `noop` with `migration PR #N was closed without merge; a maintainer must decide before another attempt`.
-- The branch exists without an open pull request: call `noop` with `stale branch dapper-migration/ado-net-to-dapper exists; a maintainer must delete or reuse it`. Never overwrite, force-push, or recreate it.
+- The branch `dapper-migration/ado-net-to-dapper` exists (with or without a closed pull request) and no migration pull request from it is open: call `noop` with `branch dapper-migration/ado-net-to-dapper exists without an open PR; a maintainer must delete it or reopen PR #N`. Never overwrite, force-push, or recreate it.
+- A closed, unmerged migration pull request exists and its branch has been deleted: the maintainer has cleared the attempt; continue, and mention the earlier pull request in the output.
 - A merged migration pull request exists: continue only when eligible code still remains, and mention the earlier pull request in the output.
 
 In `review` mode also search open issues in `SAFE_OUTPUT_REPO` labelled `dapper-migration:migrate`. When an open review issue already covers `TARGET_REPO`, call `noop` with `existing review issue #N`.
