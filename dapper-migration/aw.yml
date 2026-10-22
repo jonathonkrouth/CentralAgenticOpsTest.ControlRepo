@@ -1,0 +1,9 @@
+name: Dapper Migration
+icon: ":package:"
+description: Review-first migration of direct SQL Server ADO.NET query and mapping code to Dapper, one draft pull request per enrolled repository.
+min-version: v0.92.6
+experimental: true
+includes:
+  - README.md
+  - .github/workflows/dapper-migration.md
+  - .github/workflows/dapper-migration-migrate.md

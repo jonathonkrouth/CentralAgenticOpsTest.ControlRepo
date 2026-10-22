@@ -10,7 +10,30 @@
         "jonathonkrouth/CentralAgenticOpsTest.Repo3"
       ]
     },
-    "campaigns": {},
+    "campaigns": {
+      "dapper-migration": {
+        "icon": "code",
+        "mode": "review",
+        "max-repositories": 3,
+        "rollout-percent": 100,
+        "targets": {
+          "jonathonkrouth/CentralAgenticOpsTest.Repo1": {
+            "mode": "review"
+          },
+          "jonathonkrouth/CentralAgenticOpsTest.Repo2": {
+            "mode": "review"
+          },
+          "jonathonkrouth/CentralAgenticOpsTest.Repo3": {
+            "mode": "review"
+          }
+        },
+        "workers": {
+          "migrate": {
+            "workflow": "dapper-migration-migrate"
+          }
+        }
+      }
+    },
     "marketplace": {
       "registries": [
         {
@@ -50,3 +73,4 @@
   "gh-aw-version": "v0.92.6",
   "version": 1
 }
+

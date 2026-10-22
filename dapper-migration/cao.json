@@ -1,0 +1,7 @@
+{
+  "campaign": "dapper-migration",
+  "orchestrator": "dapper-migration",
+  "workers": {
+    "migrate": "dapper-migration-migrate"
+  }
+}
