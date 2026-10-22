@@ -81,7 +81,7 @@ worker run waits for a human to start a new orchestrator run.
 | --- | --- |
 | Orchestrator | Singleton concurrency, one dispatch per `(worker, target, mode)`, `dispatch-workflow.max: 3`, no retries, no schedule |
 | Worker concurrency | One run per target. `cancel-in-progress: false` queues a second dispatch instead of cancelling an in-flight PR |
-| Handler | `create-pull-request`: `max: 1`, `allowed-branches: [dapper-migration/ado-net-to-dapper]`, `preserve-branch-name: true`, `recreate-ref: false` (an existing branch is never recreated), `fallback-as-issue: false` |
+| Handler | `create-pull-request`: `max: 1`, `allowed-branches: [dapper-migration/ado-net-to-dapper]`, `preserve-branch-name: true`, `recreate-ref: false` (an existing branch is never recreated), `fallback-as-issue: false`, `allowed-repos` equal to `target-repo` (one repository per run) |
 | Handler | `create-issue`: `deduplicate-by-title: true`, stable title, `max: 1`, `expires: 14d` |
 | Prompt | Checks for an existing PR, branch, review issue, or body marker `<!-- dapper-migration:migrate target=OWNER/REPO -->` |
 

@@ -124,6 +124,8 @@ tools:
 safe-outputs:
   create-pull-request:
     target-repo: ${{ (inputs.safe_output_mode || 'review') == 'review' && (inputs.safe_output_repo || github.repository) || inputs.target_repo }}
+    # Same single repository as target-repo; gh-aw re-validates the dispatched target_repo input against handler allowlists after creation.
+    allowed-repos: ${{ (inputs.safe_output_mode || 'review') == 'review' && (inputs.safe_output_repo || github.repository) || inputs.target_repo }}
     title-prefix: "[dapper-migration:migrate] "
     labels: [dapper-migration, dapper-migration:migrate]
     draft: true
