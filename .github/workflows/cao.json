@@ -2,7 +2,6 @@
   "$schema": "https://raw.githubusercontent.com/githubnext/gh-cao/main/.github/workflows/shared/cao.schema.json",
   "control-plane": {
     "activity": {
-      "public-only": true,
       "repositories": [
         "jonathonkrouth/CentralAgenticOpsTest.ControlRepo",
         "jonathonkrouth/CentralAgenticOpsTest.Repo1",
