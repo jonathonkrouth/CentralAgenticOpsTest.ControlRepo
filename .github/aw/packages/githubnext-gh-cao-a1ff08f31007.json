@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "package": "githubnext/gh-cao",
+  "source": "githubnext/gh-cao@d29ce7ba7a628e24988f8fbbe108396b9d037705",
+  "resolvedCommit": "d29ce7ba7a628e24988f8fbbe108396b9d037705",
+  "installer": "gh-aw v0.92.6",
+  "files": [
+    {
+      "source": ".github/aw/instructions.md",
+      "destination": ".github/aw/instructions.md",
+      "sha256": "2aafa3fe6af83d43930b5a526e50a6a568e52a731df957883093fce11a8441fe"
+    },
+    {
+      "source": ".github/workflows/cao-activity.yml",
+      "destination": ".github/workflows/cao-activity.yml",
+      "sha256": "4fa6bd9633210976234fc7999bf0c620a18aa7153a099230b43132bb83953033"
+    },
+    {
+      "source": ".github/workflows/cao-dashboard.yml",
+      "destination": ".github/workflows/cao-dashboard.yml",
+      "sha256": "3f7e981f51bdaa8e869190be3fec8b6a9e328c128cf3daa636fc875858e9bc4a"
+    },
+    {
+      "source": ".github/workflows/cao-validate.yml",
+      "destination": ".github/workflows/cao-validate.yml",
+      "sha256": "28b68ccbafad66cb712163501c2022a0b575d3f773c76bd317dec5e4401a2b33"
+    },
+    {
+      "source": ".github/workflows/shared/authority.mjs",
+      "destination": ".github/workflows/shared/authority.mjs",
+      "sha256": "aed10c31b2bc638f90d4d61726c73afce119ecd59c0335b4e430e7173f260fec"
+    },
+    {
+      "source": ".github/workflows/shared/control.mjs",
+      "destination": ".github/workflows/shared/control.mjs",
+      "sha256": "eec92841210cdb11f5c5e0d69c378e16bf58c20522f6a169820e706af30d0429"
+    },
+    {
+      "source": ".github/workflows/shared/github-apps.mjs",
+      "destination": ".github/workflows/shared/github-apps.mjs",
+      "sha256": "9069412899d38b26cbe8dd4b9d7c12d6e5b25809cf2e04e84bb8cac47411c67d"
+    },
+    {
+      "source": ".github/workflows/shared/materialize-cao.mjs",
+      "destination": ".github/workflows/shared/materialize-cao.mjs",
+      "sha256": "329b7b056c06c4048c143aa5d6ec4e166b2fca2b39bef873793a44bf3bcb9c0a"
+    },
+    {
+      "source": ".github/workflows/shared/operations.mjs",
+      "destination": ".github/workflows/shared/operations.mjs",
+      "sha256": "9ac318a4f366cffe1cc19fa5af210275ab7749194fcbe771dd89e5463b5eed40"
+    },
+    {
+      "source": ".github/workflows/shared/policy.mjs",
+      "destination": ".github/workflows/shared/policy.mjs",
+      "sha256": "3c28d4c96ba95d904de06360fef60816d5579c4767a9353e0ba696fb5b547164"
+    }
+  ]
+}

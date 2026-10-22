@@ -1,0 +1,263 @@
+import { reconcileChildren } from './dom-reconciler.js';
+import { createDebug } from './debug.js';
+
+const debugReactive = createDebug('reactive');
+
+/**
+ * @template T
+ * @typedef {{ get: () => T, set: (value: T | ((current: T) => T)) => T, subscribe: (listener: () => void) => () => void }} State
+ */
+
+/**
+ * @typedef {{ run: () => void, schedule: () => void, stop: () => void, _computed: boolean, _stopped: boolean, _registerCleanup: (cleanup: () => void) => void }} EffectHandle
+ */
+
+/** @type {EffectHandle | null} */
+let activeEffect = null;
+let batchDepth = 0;
+let flushing = false;
+/** @type {Set<EffectHandle>} */
+const pendingEffects = new Set();
+/** @type {Set<EffectHandle>} */
+const pendingComputations = new Set();
+
+function flushEffects() {
+  if (batchDepth > 0 || flushing) return;
+  if (pendingComputations.size > 0 || pendingEffects.size > 0) {
+    debugReactive({
+      event: 'flush-start',
+      computedCount: pendingComputations.size,
+      effectCount: pendingEffects.size
+    });
+  }
+  flushing = true;
+  try {
+    while (pendingComputations.size > 0 || pendingEffects.size > 0) {
+      const queue = pendingComputations.size > 0 ? pendingComputations : pendingEffects;
+      const handle = queue.values().next().value;
+      if (!handle) break;
+      queue.delete(handle);
+      handle.run();
+    }
+  } finally {
+    flushing = false;
+  }
+}
+
+/**
+ * Groups reactive writes so each dependent effect runs once with the final
+ * state, matching the transaction semantics used by mature reactive runtimes.
+ * @template T
+ * @param {() => T} fn
+ * @returns {T}
+ */
+export function batch(fn) {
+  batchDepth += 1;
+  try {
+    return fn();
+  } finally {
+    batchDepth -= 1;
+    flushEffects();
+  }
+}
+
+/**
+ * Reads reactive state without subscribing the running effect to it, so
+ * bookkeeping reads never widen an effect's dependencies.
+ * @template T
+ * @param {() => T} fn
+ * @returns {T}
+ */
+export function untracked(fn) {
+  const previous = activeEffect;
+  activeEffect = null;
+  try {
+    return fn();
+  } finally {
+    activeEffect = previous;
+  }
+}
+
+/**
+ * Registers lifecycle cleanup with the currently running effect.
+ * @param {() => void} cleanup
+ */
+export function onCleanup(cleanup) {
+  if (!activeEffect) {
+    throw new Error('Reactive cleanup must be registered inside an effect.');
+  }
+  activeEffect._registerCleanup(cleanup);
+}
+
+/**
+ * @param {() => void} fn
+ * @param {{ computed?: boolean, signal?: AbortSignal }} [options]
+ * @returns {EffectHandle}
+ */
+export function effect(fn, options = {}) {
+  /** @type {Set<() => void>} */
+  const cleanups = new Set();
+  let stopped = false;
+  const stopFromSignal = () => handle.stop();
+
+  /** @type {EffectHandle} */
+  const handle = {
+    _computed: options.computed === true,
+    _stopped: false,
+    run() {
+      if (stopped) return;
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+
+      cleanups.clear();
+      const previous = activeEffect;
+      activeEffect = handle;
+      try {
+        fn();
+      } finally {
+        activeEffect = previous;
+      }
+    },
+    schedule() {
+      if (stopped) return;
+      if (batchDepth > 0 || flushing) {
+        (handle._computed ? pendingComputations : pendingEffects).add(handle);
+      } else {
+        handle.run();
+      }
+    },
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      handle._stopped = true;
+      options.signal?.removeEventListener('abort', stopFromSignal);
+      pendingEffects.delete(handle);
+      pendingComputations.delete(handle);
+      debugReactive({ event: 'effect-stopped', computed: handle._computed, cleanupCount: cleanups.size });
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+      cleanups.clear();
+    },
+    _registerCleanup(cleanup) {
+      if (stopped) cleanup();
+      else cleanups.add(cleanup);
+    }
+  };
+
+  if (options.signal?.aborted) {
+    stopped = true;
+    handle._stopped = true;
+    debugReactive({ event: 'effect-aborted-before-start', computed: handle._computed });
+  } else {
+    options.signal?.addEventListener('abort', stopFromSignal, { once: true });
+    handle.run();
+  }
+  return handle;
+}
+
+/**
+ * Runs a reactive DOM renderer against an isolated, detached ShadowRoot, then
+ * morphs the result into the owned root with the fewest practical mutations.
+ * Existing compatible nodes are retained, preserving focus and local DOM state.
+ *
+ * @param {Node} root
+ * @param {() => unknown} update
+ * @param {{ signal?: AbortSignal }} [options]
+ * @returns {EffectHandle}
+ */
+export function render(root, update, options = {}) {
+  const ownerDocument = root.ownerDocument ?? document;
+  const shadowHost = ownerDocument.createElement('div');
+  const shadowRoot = shadowHost.attachShadow({ mode: 'closed' });
+
+  return effect(() => {
+    const output = update();
+    shadowRoot.replaceChildren(...renderedNodes(output, ownerDocument));
+    reconcileChildren(root, shadowRoot);
+  }, options);
+}
+
+/**
+ * @param {unknown} value
+ * @param {Document} ownerDocument
+ * @returns {Node[]}
+ */
+function renderedNodes(value, ownerDocument) {
+  if (Array.isArray(value)) return value.flatMap((child) => renderedNodes(child, ownerDocument));
+  if (value == null || value === false) return [];
+  if (value instanceof Node) return [value];
+  return [ownerDocument.createTextNode(String(value))];
+}
+
+/**
+ * @template T
+ * @param {T} initialValue
+ * @returns {State<T>}
+ */
+export function state(initialValue) {
+  let current = initialValue;
+  /** @type {Set<() => void>} */
+  const listeners = new Set();
+
+  return {
+    get() {
+      if (activeEffect && !activeEffect._stopped) {
+        const subscriber = activeEffect;
+        const listener = () => subscriber.schedule();
+        listeners.add(listener);
+        subscriber._registerCleanup(() => {
+          listeners.delete(listener);
+        });
+      }
+      return current;
+    },
+    set(value) {
+      const next = typeof value === 'function'
+        ? /** @type {(current: T) => T} */ (value)(current)
+        : value;
+      if (Object.is(current, next)) {
+        return current;
+      }
+      current = next;
+      for (const listener of [...listeners]) {
+        listener();
+      }
+      return current;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    }
+  };
+}
+
+/**
+ * @template T
+ * @typedef {{ get: () => T, dispose: () => void }} Derived
+ */
+
+/**
+ * @template T
+ * @param {() => T} compute
+ * @param {{ signal?: AbortSignal }} [options]
+ * @returns {Derived<T>}
+ */
+export function derived(compute, options = {}) {
+  const value = state(compute());
+  const handle = effect(() => {
+    value.set(compute());
+  }, { computed: true, signal: options.signal });
+
+  return {
+    get() {
+      return value.get();
+    },
+    dispose() {
+      handle.stop();
+    }
+  };
+}

@@ -1,0 +1,145 @@
+import { h, keyed } from '../dom.js';
+import { effect } from '../reactive.js';
+import { bindFactorySources, createFactoryScope } from './factory-elements.js';
+import { text } from './count-formatters.js';
+import { findLink, renderSafeLink } from './link-content.js';
+import { renderIconSpan } from './ui-primitives.js';
+import { createDebug } from '../debug.js';
+
+const debugLinkButtonList = createDebug('link-button-list');
+
+/**
+ * Renders one declared source as a compact list of navigation buttons.
+ * @param {import('./ui-elements.js').ElementRenderContext} context
+ * @returns {HTMLElement}
+ */
+export function renderLinkButtonList(context) {
+  const sourceName = context.sourceNames[0] ?? '';
+  const bindings = bindFactorySources(context.sources, [sourceName], context);
+  const scope = createFactoryScope();
+  const source = bindings[sourceName];
+  debugLinkButtonList({ event: 'initialized', sourceName });
+  const labelField = text(context.elementConfig?.['label-field']);
+  const labelBadgeField = text(context.elementConfig?.['label-badge-field']);
+  const linkField = text(context.elementConfig?.['link-field']);
+  const iconField = text(context.elementConfig?.['icon-field']);
+  const indicatorField = text(context.elementConfig?.['indicator-field']);
+  const indicatorLabelField = text(context.elementConfig?.['indicator-label-field']);
+  const fallbackIcon = text(context.elementConfig?.['fallback-icon']) || 'link';
+  const rowKey = (/** @type {Record<string, unknown>} */ row, /** @type {number} */ index) =>
+    findLink(row, linkField)?.href || text(row[labelField]) || String(index);
+  /** @type {Map<string, HTMLElement>} */
+  const labelBadgesByKey = new Map();
+  const items = keyed(
+    source.rows(),
+    (row, index) => {
+      const label = text(row[labelField]) || 'Link';
+      const labelBadge = labelBadgeField ? text(row[labelBadgeField]) : '';
+      const indicator = text(row[indicatorField]);
+      const indicatorLabel = text(row[indicatorLabelField]);
+      const badge = labelBadgeField
+        ? h('span', { className: 'link-button-list-label-badge', hidden: !labelBadge }, labelBadge)
+        : null;
+      if (badge) labelBadgesByKey.set(rowKey(row, index), badge);
+      const link = renderSafeLink(
+        h('span', { className: 'link-button-list-content' },
+          renderIconSpan('link-button-list-icon', text(row[iconField]) || fallbackIcon, { ariaHidden: true }),
+          h('span', { className: 'link-button-list-label' }, label, badge),
+          indicator
+            ? h(
+                'span',
+                {
+                  className: 'link-button-list-indicator',
+                  title: indicatorLabel || undefined,
+                  'aria-label': indicatorLabel || undefined
+                },
+                renderIconSpan('', indicator, { ariaHidden: true })
+              )
+            : null,
+          renderIconSpan('link-button-list-chevron', 'chevron-right', { ariaHidden: true })
+        ),
+        findLink(row, linkField)
+      );
+      if (link instanceof HTMLAnchorElement) {
+        link.dataset.routeTitle = label;
+        const href = link.getAttribute('href') ?? '';
+        const route = href.match(/^#page-([^?]+)/)?.[1];
+        if (route) {
+          try {
+            link.dataset.navPageId = decodeURIComponent(route);
+          } catch {
+            link.removeAttribute('data-nav-page-id');
+          }
+        }
+      }
+      return h(
+        'li',
+        { className: 'link-button-list-item' },
+        link
+      );
+    },
+    rowKey
+  );
+  const list = h('ul', { className: 'link-button-list' }, items);
+  const skeleton = h(
+    'div',
+    { className: 'link-button-list-skeleton', 'aria-hidden': 'true' },
+    ...Array.from({ length: 3 }, () => h(
+      'span',
+      { className: 'link-button-list-skeleton-row' },
+      h('span'),
+      h('span')
+    ))
+  );
+  const empty = h(
+    'p',
+    { className: 'link-button-list-empty' },
+    text(context.elementConfig?.['empty-message']) || 'No links are available.'
+  );
+  const root = h(
+    'section',
+    { className: 'link-button-list-view', 'aria-labelledby': `${context.viewId || context.pageId}-heading` },
+    h('header', null,
+      h('h2', { id: `${context.viewId || context.pageId}-heading` }, context.title),
+      context.description ? h('p', null, context.description) : null),
+    list,
+    skeleton,
+    empty
+  );
+  let previousCount = -1;
+  /** @type {boolean | undefined} */
+  let previousPending;
+  effect(() => {
+    items.items = source.rows();
+    items.render();
+    if (items.items.length !== previousCount) {
+      debugLinkButtonList({ event: 'items-updated', count: items.items.length });
+      previousCount = items.items.length;
+    }
+    if (labelBadgeField) {
+      const nextKeys = new Set(items.items.map(rowKey));
+      for (const key of [...labelBadgesByKey.keys()]) {
+        if (!nextKeys.has(key)) labelBadgesByKey.delete(key);
+      }
+      items.items.forEach((row, index) => {
+        const badge = labelBadgesByKey.get(rowKey(row, index));
+        if (!badge) return;
+        const labelBadge = text(row[labelBadgeField]);
+        badge.textContent = labelBadge;
+        badge.hidden = !labelBadge;
+      });
+    }
+    const pending = source.pending();
+    if (pending !== previousPending) {
+      debugLinkButtonList({ event: 'pending-changed', pending });
+      previousPending = pending;
+    }
+    const hasRows = items.items.length > 0;
+    list.hidden = !hasRows;
+    skeleton.hidden = !pending;
+    empty.hidden = hasRows || pending;
+    root.toggleAttribute('aria-busy', pending);
+  }, { signal: scope.signal });
+  scope.bind(root);
+  return root;
+}

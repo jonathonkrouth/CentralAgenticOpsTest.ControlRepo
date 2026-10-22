@@ -1,0 +1,18 @@
+/**
+ * Shared Dashboard Language config.body values for route-bound elements.
+ */
+
+import campaignRouteNavigation from './campaign-route-navigation.json' with { type: 'json' };
+
+export const WORKFLOW_ROUTE_BODY_VALUES = ['insights', 'reports', 'runs'];
+export const WORKFLOW_ROUTE_PAGE_BODY_VALUES = ['insights', 'reports', 'runs'];
+// Keep campaign route IDs stable independently of their user-facing labels.
+export const CAMPAIGN_ROUTE_TABS = Object.freeze(campaignRouteNavigation.tabs);
+export const CAMPAIGN_ROUTE_DEFAULT_BODY = campaignRouteNavigation.default;
+export const CAMPAIGN_ROUTE_ALIASES = Object.freeze(campaignRouteNavigation.aliases);
+export const CAMPAIGN_ROUTE_BODY_VALUES = Object.freeze([
+  ...CAMPAIGN_ROUTE_TABS.map((tab) => tab.id),
+  ...campaignRouteNavigation['additional-bodies'],
+  ...Object.keys(CAMPAIGN_ROUTE_ALIASES)
+]);
+export const OUTCOME_DETAIL_SECTION_BODY_VALUES = ['discussion', 'metadata'];

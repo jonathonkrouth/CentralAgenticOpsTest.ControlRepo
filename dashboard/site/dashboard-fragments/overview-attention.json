@@ -1,0 +1,827 @@
+{
+  "queries": [
+    {
+      "name": "failure-run-base",
+      "subject": "Select retained runs with failure, startup-failure, stale, or timed-out conclusions for the failed-run ledger and streak inputs.",
+      "objective": "Provide one consistent failure-conclusion evidence set to downstream Overview queries.",
+      "acceptance": "Each selected run has one of the four declared conclusions within the selected horizon; other conclusions remain outside this set, and missing run coverage is not interpreted as no failures.",
+      "from": "runs",
+      "filter": {
+        "predicates": [
+          {
+            "field": "run-conclusion",
+            "in": [
+              "failure",
+              "startup-failure",
+              "stale",
+              "timed-out"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "failed-runs",
+      "subject": "List failed workflow runs that need operator attention.",
+      "objective": "Give operators the most recent observed failed runs to inspect in GitHub.",
+      "acceptance": "Unprojected run rows retain available conclusion, started-at, and run evidence fields in descending started-at order; inspect source logs and missing links before attributing a cause or declaring resolution.",
+      "from": "failure-run-base",
+      "order-by": [
+        {
+          "field": "started-at",
+          "direction": "desc"
+        }
+      ]
+    },
+    {
+      "name": "overview-failing-runs",
+      "subject": "Identify failed runs in the selected snapshot horizon so subsequent streak logic can use the same declarative failure definition.",
+      "objective": "Project distinct failure-run counts by organization, repository, workflow, and run for streak joins.",
+      "acceptance": "Each grouped run identity has a failing-runs count derived from failure-run-base in the selected horizon; this stage does not assert a consecutive streak or require action.",
+      "from": "failure-run-base",
+      "aggregate": {
+        "by": [
+          "organization",
+          "repository",
+          "workflow",
+          "run"
+        ],
+        "values": [
+          {
+            "field": "run",
+            "as": "failing-runs",
+            "reducer": "distinct-count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "overview-failing-workflows",
+      "subject": "Identify only workflows that have at least one failed run in the selected snapshot horizon before computing streaks.",
+      "objective": "Provide workflow identities with observed failed runs for the streak computation.",
+      "acceptance": "Each organization/repository/workflow group has a distinct failing-runs count from overview-failing-runs; the count covers observed failures, not the latest consecutive streak.",
+      "from": "overview-failing-runs",
+      "aggregate": {
+        "by": [
+          "organization",
+          "repository",
+          "workflow"
+        ],
+        "values": [
+          {
+            "field": "run",
+            "as": "failing-runs",
+            "reducer": "distinct-count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "overview-repeated-failure-groups",
+      "subject": "Group each workflow's latest consecutive failing run sequence in the selected snapshot horizon, resetting the group after any successful run.",
+      "objective": "Project the latest observed consecutive failure-count per workflow for downstream blocked-work matching.",
+      "acceptance": "failure-count follows run ordering and the declared latest-failure-streak reducer, with non-failing runs breaking the streak; missing earlier runs or incomplete snapshots limit the observed sequence.",
+      "from": "runs",
+      "joins": [
+        {
+          "source": "overview-failing-workflows",
+          "type": "inner",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            },
+            {
+              "left": "workflow",
+              "right": "workflow"
+            }
+          ],
+          "fields": [
+            {
+              "field": "failing-runs",
+              "as": "failing-runs"
+            }
+          ]
+        },
+        {
+          "source": "overview-failing-runs",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            },
+            {
+              "left": "workflow",
+              "right": "workflow"
+            },
+            {
+              "left": "run",
+              "right": "run"
+            }
+          ],
+          "fields": [
+            {
+              "field": "failing-runs",
+              "as": "run-failing-count"
+            }
+          ]
+        }
+      ],
+      "compute": [
+        {
+          "as": "failure-streak-point",
+          "function": "failure-streak-point",
+          "args": [
+            {
+              "field": "started-at"
+            },
+            {
+              "field": "run"
+            },
+            {
+              "field": "run-failing-count"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "organization",
+          "repository",
+          "workflow"
+        ],
+        "values": [
+          {
+            "field": "failure-streak-point",
+            "as": "failure-count",
+            "reducer": "latest-failure-streak"
+          }
+        ]
+      }
+    },
+    {
+      "name": "overview-repeated-failure-candidates",
+      "subject": "Attach selected-horizon failure counts to each workflow's latest canonical work item.",
+      "objective": "Pair blocked work items with observed workflow failure streaks and retained run evidence before attention filtering.",
+      "acceptance": "Candidates are filtered to blocked items with a matching organization/repository/workflow streak; is-repeated reflects failure-count greater than one, while selected evidence-link and run-link can be absent or refer to the work item rather than the latest failed run.",
+      "from": "work-items",
+      "joins": [
+        {
+          "source": "overview-repeated-failure-groups",
+          "type": "inner",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            },
+            {
+              "left": "workflow",
+              "right": "workflow"
+            }
+          ],
+          "fields": [
+            {
+              "field": "failure-count",
+              "as": "failure-count"
+            }
+          ]
+        }
+      ],
+      "filter": {
+        "predicates": [
+          {
+            "field": "lifecycle-state",
+            "equals": "blocked"
+          }
+        ]
+      },
+      "compute": [
+        {
+          "as": "is-repeated",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "failure-count"
+            },
+            {
+              "value": 1
+            }
+          ]
+        },
+        {
+          "as": "attention-signal-id",
+          "function": "concat",
+          "args": [
+            {
+              "value": "repeated-failure:"
+            },
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            },
+            {
+              "value": ":"
+            },
+            {
+              "field": "workflow"
+            }
+          ]
+        },
+        {
+          "as": "kind",
+          "function": "coalesce",
+          "args": [
+            {
+              "value": "Repeated workflow failures"
+            },
+            {
+              "value": "Repeated workflow failures"
+            }
+          ]
+        },
+        {
+          "as": "title",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "workflow"
+            },
+            {
+              "value": "Workflow"
+            }
+          ]
+        },
+        {
+          "as": "attention-reason",
+          "function": "concat",
+          "args": [
+            {
+              "field": "failure-count"
+            },
+            {
+              "value": " failed runs in the selected horizon"
+            }
+          ]
+        },
+        {
+          "as": "action",
+          "function": "coalesce",
+          "args": [
+            {
+              "value": "Open latest failed run on GitHub"
+            },
+            {
+              "value": "Open latest failed run on GitHub"
+            }
+          ]
+        },
+        {
+          "as": "icon",
+          "function": "coalesce",
+          "args": [
+            {
+              "value": "x-circle"
+            },
+            {
+              "value": "x-circle"
+            }
+          ]
+        },
+        {
+          "as": "tone",
+          "function": "coalesce",
+          "args": [
+            {
+              "value": "critical"
+            },
+            {
+              "value": "critical"
+            }
+          ]
+        },
+        {
+          "as": "priority",
+          "function": "number",
+          "args": [
+            {
+              "value": 0
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "is-repeated"
+        },
+        {
+          "field": "attention-signal-id"
+        },
+        {
+          "field": "kind"
+        },
+        {
+          "field": "title"
+        },
+        {
+          "field": "scope"
+        },
+        {
+          "field": "attention-reason",
+          "as": "reason"
+        },
+        {
+          "field": "observed-at"
+        },
+        {
+          "field": "action"
+        },
+        {
+          "field": "evidence-link"
+        },
+        {
+          "field": "run-link"
+        },
+        {
+          "field": "icon"
+        },
+        {
+          "field": "tone"
+        },
+        {
+          "field": "priority"
+        },
+        {
+          "field": "failure-count"
+        }
+      ]
+    },
+    {
+      "name": "overview-repeated-failure-attention",
+      "subject": "Keep only unresolved workflows with two or more failures in the selected horizon.",
+      "objective": "Surface blocked workflow items with observed repeated failures for bounded run investigation.",
+      "acceptance": "Every row inherits a blocked item with is-repeated true and projects evidence-link and run-link when available; verify run order, links, and current state before treating the failure as still unresolved.",
+      "from": "overview-repeated-failure-candidates",
+      "filter": {
+        "predicates": [
+          {
+            "field": "is-repeated",
+            "equals": true
+          }
+        ]
+      },
+      "select": [
+        {
+          "field": "attention-signal-id"
+        },
+        {
+          "field": "kind"
+        },
+        {
+          "field": "title"
+        },
+        {
+          "field": "scope"
+        },
+        {
+          "field": "reason"
+        },
+        {
+          "field": "observed-at"
+        },
+        {
+          "field": "action"
+        },
+        {
+          "field": "evidence-link"
+        },
+        {
+          "field": "run-link"
+        },
+        {
+          "field": "icon"
+        },
+        {
+          "field": "tone"
+        },
+        {
+          "field": "priority"
+        },
+        {
+          "field": "failure-count"
+        }
+      ]
+    },
+    {
+      "name": "overview-review-attention",
+      "subject": "Select only unresolved outputs explicitly awaiting human review with their retained GitHub evidence destination.",
+      "objective": "Present review-state work items and their retained GitHub destination to a human reviewer.",
+      "acceptance": "Rows are filtered to lifecycle-state review and project the work-item ID as attention-signal-id, plus reason, evidence-link, and run-link where present; reviewer disposition must be checked at source.",
+      "from": "work-items",
+      "filter": {
+        "predicates": [
+          {
+            "field": "lifecycle-state",
+            "equals": "review"
+          }
+        ]
+      },
+      "compute": [
+        {
+          "as": "kind",
+          "function": "coalesce",
+          "args": [
+            {
+              "value": "Human review required"
+            },
+            {
+              "value": "Human review required"
+            }
+          ]
+        },
+        {
+          "as": "title",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "objective"
+            },
+            {
+              "value": "Produced output"
+            }
+          ]
+        },
+        {
+          "as": "action",
+          "function": "coalesce",
+          "args": [
+            {
+              "value": "Open review item on GitHub"
+            },
+            {
+              "value": "Open review item on GitHub"
+            }
+          ]
+        },
+        {
+          "as": "icon",
+          "function": "coalesce",
+          "args": [
+            {
+              "value": "eye"
+            },
+            {
+              "value": "eye"
+            }
+          ]
+        },
+        {
+          "as": "tone",
+          "function": "coalesce",
+          "args": [
+            {
+              "value": "action"
+            },
+            {
+              "value": "action"
+            }
+          ]
+        },
+        {
+          "as": "priority",
+          "function": "number",
+          "args": [
+            {
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "work-item-id",
+          "as": "attention-signal-id"
+        },
+        {
+          "field": "kind"
+        },
+        {
+          "field": "title"
+        },
+        {
+          "field": "scope"
+        },
+        {
+          "field": "reason"
+        },
+        {
+          "field": "observed-at"
+        },
+        {
+          "field": "action"
+        },
+        {
+          "field": "evidence-link"
+        },
+        {
+          "field": "run-link"
+        },
+        {
+          "field": "icon"
+        },
+        {
+          "field": "tone"
+        },
+        {
+          "field": "priority"
+        }
+      ]
+    },
+    {
+      "name": "overview-needs-attention",
+      "subject": "Combine grouped repeated failures and unresolved review outputs without introducing ordinary activity or duplicate work items.",
+      "objective": "Prioritize observed blocked repeated-failure work and review-state outputs for investigation.",
+      "acceptance": "Rows come only from the repeated-failure or review inputs and retain their source reasons, links, and ordering; confirm fresh source status before acting, and do not equate a missing row with resolved work.",
+      "from": "overview-repeated-failure-attention",
+      "union": [
+        "overview-review-attention"
+      ],
+      "order-by": [
+        {
+          "field": "priority",
+          "direction": "asc"
+        },
+        {
+          "field": "observed-at",
+          "direction": "desc"
+        },
+        {
+          "field": "attention-signal-id",
+          "direction": "asc"
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "id": "overview-failed-runs",
+      "kind": "custom",
+      "intent": "Locate runs ending in recorded failure states for focused investigation.",
+      "subject": "Retained failed runs in the selected scope and horizon.",
+      "objective": "Open concrete execution evidence before proposing repairs.",
+      "acceptance": "Preserve native status/conclusion, run identity, timestamps and source links; state which conclusions count as failure. Partial/unavailable evidence must not imply no failures or establish root cause.",
+      "title": "Failed runs",
+      "icon": "x-circle",
+      "description": "Select a failed run for evidence-backed CAO repair investigation.",
+      "route": {
+        "navigation-page": "overview"
+      },
+      "views": [
+        {
+          "id": "overview-failed-runs-ledger",
+          "title": "Failed run evidence",
+          "description": "Open a run on GitHub to inspect its jobs, logs, and retained evidence.",
+          "data": {
+            "source": "failed-runs",
+            "filters": {
+              "run-conclusion": [
+                "failure",
+                "startup-failure",
+                "stale",
+                "timed-out"
+              ]
+            },
+            "order-by": [
+              {
+                "field": "started-at",
+                "direction": "desc"
+              }
+            ]
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "lazy-list": true,
+          "column-summaries": true,
+          "empty-message": "No failed runs were observed in the selected horizon.",
+          "layout": "full-view",
+          "encoding": {
+            "columns": [
+              {
+                "field": "started-at",
+                "type": "temporal",
+                "format": "human-friendly-timestamp",
+                "title": "Date"
+              },
+              {
+                "field": "repository",
+                "type": "nominal",
+                "title": "Repository"
+              },
+              {
+                "field": "run",
+                "type": "nominal",
+                "title": "Workflow run"
+              },
+              {
+                "field": "failure-detail",
+                "type": "nominal",
+                "title": "Error"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "overview-blocked-work",
+      "kind": "custom",
+      "intent": "Inspect delegated work whose latest recorded admission or run state blocks progress.",
+      "subject": "Retained blocked-work evidence within the selected snapshot horizon.",
+      "objective": "Identify the recorded blocker and next bounded investigation.",
+      "acceptance": "Preserve work/run identity, latest-state basis, recorded blocking reason and evidence links; distinguish blocked, failed and missing states. Never infer authorization to bypass admission or widen policy.",
+      "title": "Blocked work",
+      "icon": "stop",
+      "description": "Identify the recorded blocker preventing delegated CAO work from progressing.",
+      "route": {
+        "navigation-page": "overview"
+      },
+      "views": [
+        {
+          "id": "overview-blocked-work-ledger",
+          "title": "Blocked work evidence",
+          "description": "Open the latest GitHub run to resolve the admission or execution failure.",
+          "data": {
+            "source": "work-items",
+            "filters": {
+              "lifecycle-state": "blocked"
+            },
+            "order-by": [
+              {
+                "field": "waiting-since",
+                "direction": "asc"
+              }
+            ]
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "column-summaries": true,
+          "empty-message": "No blocked work was observed in the selected horizon.",
+          "layout": "full-view",
+          "encoding": {
+            "columns": [
+              {
+                "field": "waiting-since",
+                "type": "temporal",
+                "format": "human-friendly-timestamp",
+                "title": "Date"
+              },
+              {
+                "field": "repository",
+                "type": "nominal",
+                "title": "Repository"
+              },
+              {
+                "field": "reason",
+                "type": "nominal",
+                "title": "Blocked by",
+                "display": "run-link"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "overview-awaiting-review",
+      "kind": "custom",
+      "intent": "Locate produced outcomes explicitly waiting for a reviewer decision.",
+      "subject": "Retained safe outputs with recorded awaiting-review disposition.",
+      "objective": "Direct human attention to unresolved review evidence.",
+      "acceptance": "Show output identity, native review state, timestamps and source links. Keep pending review distinct from acceptance, rejection and unavailable state; do not invent or perform reviewer decisions.",
+      "title": "Awaiting review",
+      "icon": "eye",
+      "description": "Select a produced outcome that requires a human review decision.",
+      "route": {
+        "navigation-page": "overview"
+      },
+      "views": [
+        {
+          "id": "overview-awaiting-review-ledger",
+          "title": "Review evidence",
+          "description": "Open the retained GitHub outcome or its run evidence to complete the review.",
+          "data": {
+            "source": "work-items",
+            "filters": {
+              "lifecycle-state": "review"
+            },
+            "order-by": [
+              {
+                "field": "waiting-since",
+                "direction": "asc"
+              }
+            ]
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "column-summaries": true,
+          "empty-message": "No work is awaiting review in the selected horizon.",
+          "layout": "full-view",
+          "encoding": {
+            "columns": [
+              {
+                "field": "waiting-since",
+                "type": "temporal",
+                "format": "human-friendly-timestamp",
+                "title": "Date"
+              },
+              {
+                "field": "repository",
+                "type": "nominal",
+                "title": "Repository"
+              },
+              {
+                "field": "objective",
+                "type": "nominal",
+                "title": "Work",
+                "display": "evidence-link"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "overview-security-findings",
+      "kind": "custom",
+      "intent": "Inspect collected security findings and their supporting workflow-run evidence.",
+      "subject": "Recorded prompt-injection, secret-leak and malicious-patch findings.",
+      "objective": "Prioritize evidence-backed security investigation without exposing sensitive content.",
+      "acceptance": "Preserve finding type, native verdict, run identity and safe provenance links; distinguish observed findings from confirmed exploitation. Missing scans are not proof of safety; never copy secrets into prompts or logs.",
+      "title": "Security findings",
+      "icon": "shield",
+      "description": "Select a retained security finding for evidence-backed investigation.",
+      "route": {
+        "navigation-page": "overview"
+      },
+      "views": [
+        {
+          "id": "overview-security-findings-ledger",
+          "title": "Security finding evidence",
+          "description": "Open the GitHub run that produced each threat-detection finding.",
+          "data": {
+            "source": "detection-observations",
+            "order-by": [
+              {
+                "field": "observed-at",
+                "direction": "desc"
+              }
+            ]
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "column-summaries": true,
+          "empty-message": "No security findings were observed in the selected horizon.",
+          "layout": "full-view",
+          "encoding": {
+            "columns": [
+              {
+                "field": "observed-at",
+                "type": "temporal",
+                "format": "human-friendly-timestamp",
+                "title": "Date"
+              },
+              {
+                "field": "repository",
+                "type": "nominal",
+                "title": "Repository"
+              },
+              {
+                "field": "detection-signal",
+                "type": "nominal",
+                "title": "Finding",
+                "display": "run-link"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

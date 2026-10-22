@@ -1,0 +1,89 @@
+import { DASHBOARD_QUERY_LIMITS } from './queries/declarative.js';
+import { createDebug } from '../debug.js';
+
+const debugTableCapacity = createDebug('table-capacity');
+
+const TABLE_ROW_LIMITS = {
+  constrained: 10000,
+  modest: 25000,
+  standard: 50000,
+  maximum: DASHBOARD_QUERY_LIMITS['max-output-rows']
+};
+
+/**
+ * @param {{ deviceMemory?: number, heapSizeLimit?: number, hardwareConcurrency?: number, mobile?: boolean }} environment
+ */
+export function tableRowLimitForEnvironment(environment) {
+  if (environment.mobile === true) return TABLE_ROW_LIMITS.constrained;
+  const limits = [];
+  const deviceMemory = Number(environment.deviceMemory);
+  if (Number.isFinite(deviceMemory)) {
+    limits.push(deviceMemory <= 2
+      ? TABLE_ROW_LIMITS.constrained
+      : deviceMemory <= 4
+        ? TABLE_ROW_LIMITS.modest
+        : deviceMemory <= 8
+          ? TABLE_ROW_LIMITS.standard
+          : TABLE_ROW_LIMITS.maximum);
+  }
+  const heapSizeLimit = Number(environment.heapSizeLimit);
+  if (Number.isFinite(heapSizeLimit)) {
+    const gibibytes = heapSizeLimit / (1024 ** 3);
+    limits.push(gibibytes <= 1
+      ? TABLE_ROW_LIMITS.constrained
+      : gibibytes <= 2
+        ? TABLE_ROW_LIMITS.modest
+        : gibibytes <= 4
+          ? TABLE_ROW_LIMITS.standard
+          : TABLE_ROW_LIMITS.maximum);
+  }
+  if (limits.length > 0) return Math.min(...limits);
+  debugTableCapacity({ event: 'memory-signal-unavailable', hardwareConcurrency: environment.hardwareConcurrency ?? null });
+  return Number(environment.hardwareConcurrency) <= 4
+    ? TABLE_ROW_LIMITS.modest
+    : TABLE_ROW_LIMITS.standard;
+}
+
+/** @param {Window} browserWindow */
+export function browserTableCapacityDecision(browserWindow) {
+  const browserNavigator = /** @type {Navigator & { deviceMemory?: number, userAgentData?: { mobile?: boolean } }} */ (
+    browserWindow.navigator
+  );
+  const browserPerformance = /** @type {Performance & { memory?: { jsHeapSizeLimit?: number } }} */ (
+    browserWindow.performance
+  );
+  const environment = {
+    deviceMemory: browserNavigator.deviceMemory,
+    heapSizeLimit: browserPerformance.memory?.jsHeapSizeLimit,
+    hardwareConcurrency: browserNavigator.hardwareConcurrency,
+    mobile: browserNavigator.userAgentData?.mobile === true
+      || (typeof browserWindow.matchMedia === 'function'
+        && browserWindow.matchMedia('(pointer: coarse) and (max-width: 768px)').matches)
+  };
+  const heapSizeLimit = Number(environment.heapSizeLimit);
+  return {
+    rowLimit: tableRowLimitForEnvironment(environment),
+    mobile: environment.mobile,
+    deviceMemoryGiB: Number.isFinite(environment.deviceMemory) ? environment.deviceMemory : null,
+    heapSizeLimitGiB: Number.isFinite(heapSizeLimit)
+      ? Math.round(heapSizeLimit / (1024 ** 3) * 10) / 10
+      : null,
+    hardwareConcurrency: Number.isFinite(environment.hardwareConcurrency)
+      ? environment.hardwareConcurrency
+      : null
+  };
+}
+
+/**
+ * @param {ReturnType<typeof browserTableCapacityDecision>} decision
+ */
+export function logTableCapacityDecision(decision) {
+  debugTableCapacity({
+    event: 'row-limit-selected',
+    rowLimit: decision.rowLimit,
+    mobile: decision.mobile,
+    deviceMemoryGiB: decision.deviceMemoryGiB,
+    heapSizeLimitGiB: decision.heapSizeLimitGiB,
+    hardwareConcurrency: decision.hardwareConcurrency
+  });
+}

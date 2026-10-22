@@ -1,0 +1,2816 @@
+{
+  "queries": [
+    {
+      "name": "dashboard-ingestion-health",
+      "subject": "Expose the current collection state for the global ingestion indicator.",
+      "objective": "Distinguish reported ingestion failure or recovery from the age of retained workflow evidence.",
+      "acceptance": "Use the authorized server collection-health classification, not cumulative failures or browser refresh time. Missing or unauthorized health remains unknown and static dashboards do not request this source.",
+      "from": "collection-health",
+      "select": [
+        { "field": "configured" },
+        { "field": "health" }
+      ],
+      "limit": 1
+    },
+    {
+      "name": "dashboard-data-freshness",
+      "subject": "Find the newest workflow activity timestamp in retained canonical data.",
+      "objective": "Warn globally when the ingested workflow evidence has not advanced for 24 hours.",
+      "acceptance": "Use upstream updated-at, falling back to created-at, never browser import or refresh time. Missing or invalid timestamps remain unknown; inactivity alone does not prove an ingestion failure.",
+      "from": "runs",
+      "compute": [
+        { "as": "data-at", "function": "coalesce", "args": [{ "field": "updated-at" }, { "field": "created-at" }] },
+        { "as": "data-at-ms", "function": "timestamp", "args": [{ "field": "data-at" }] }
+      ],
+      "aggregate": {
+        "values": [{ "field": "data-at-ms", "as": "latest-data-at", "reducer": "max" }]
+      }
+    },
+    {
+      "name": "indexing-shards",
+      "subject": "List retained Activity shard import receipts.",
+      "objective": "Inspect which shards were ingested, when, and how many records they committed.",
+      "acceptance": "Show shard scope, phase, import status, import timestamp, counts and payload identity from retained receipts. Import time is not upstream freshness and missing receipts do not prove complete coverage.",
+      "from": "transactions",
+      "filter": {
+        "predicates": [{ "field": "kind", "in": ["ingest-normalized-jsonl", "ingest-jsonl", "ingest-jsonl-failed", "runs", "records"] }]
+      },
+      "select": [
+        { "field": "id" },
+        { "field": "payloadScope", "as": "shard" },
+        { "field": "kind" },
+        { "field": "activity-status", "as": "status" },
+        { "field": "createdAt", "as": "ingested-at" },
+        { "field": "committedRecords", "as": "committed-records" },
+        { "field": "rawRuns", "as": "workflow-runs" },
+        { "field": "payloadHash", "as": "payload-hash" }
+      ],
+      "order-by": [{ "field": "ingested-at", "direction": "desc" }]
+    },
+    {
+      "name": "ingestion-queued",
+      "subject": "Label the shared collection task queue depth for the administrator queue chart.",
+      "objective": "Identify total ready and scheduled collection work, including backfill tasks.",
+      "acceptance": "Show the observed shared queue depth only when collection is configured; missing or unauthorized health data is not zero pending work.",
+      "from": "collection-health",
+      "filter": { "predicates": [{ "field": "configured", "equals": true }] },
+      "compute": [{ "as": "queue", "function": "coalesce", "args": [{ "value": "Ready and scheduled" }, { "value": "Ready and scheduled" }] }],
+      "select": [{ "field": "queue" }, { "field": "queue-depth", "as": "tasks" }]
+    },
+    {
+      "name": "ingestion-inflight",
+      "subject": "Label current in-flight collection tasks for the administrator queue chart.",
+      "objective": "Distinguish leased collection tasks from work awaiting collection.",
+      "acceptance": "Show the observed pending task count only when collection is configured; do not infer a count from an unavailable source.",
+      "from": "collection-health",
+      "filter": { "predicates": [{ "field": "configured", "equals": true }] },
+      "compute": [{ "as": "queue", "function": "coalesce", "args": [{ "value": "In flight" }, { "value": "In flight" }] }],
+      "select": [{ "field": "queue" }, { "field": "pending-tasks", "as": "tasks" }]
+    },
+    {
+      "name": "ingestion-backfill",
+      "subject": "Label cumulative backfill run admissions for the administrator ingestion chart.",
+      "objective": "Compare historically admitted run tasks with current outstanding work without treating admissions as a live backlog.",
+      "acceptance": "Show the cumulative run task admissions only when collection is configured; this value does not decrease as tasks complete and missing health data does not imply completed backfill.",
+      "from": "collection-health",
+      "filter": { "predicates": [{ "field": "configured", "equals": true }] },
+      "compute": [{ "as": "queue", "function": "coalesce", "args": [{ "value": "Backfill admitted (total)" }, { "value": "Backfill admitted (total)" }] }],
+      "select": [{ "field": "queue" }, { "field": "backfill-queued-run-tasks", "as": "tasks" }]
+    },
+    {
+      "name": "ingestion-queue-sizes",
+      "subject": "Compare current shared queue pressure, in-flight tasks, and cumulative historical backfill admissions from the administrator-only server snapshot.",
+      "objective": "Spot a growing backlog without treating past backfill admissions as outstanding work.",
+      "acceptance": "Current queue sizes and cumulative admissions come only from an authorized collection-health snapshot; unavailable state is not zero.",
+      "from": "ingestion-queued",
+      "union": ["ingestion-inflight", "ingestion-backfill"],
+      "select": [{ "field": "queue" }, { "field": "tasks" }]
+    },
+    {
+      "name": "ingestion-webhook-status",
+      "subject": "Inspect live webhook delivery counters for the current server process.",
+      "objective": "Distinguish signature validation, acknowledgements, rejections and failures without polling GitHub.",
+      "acceptance": "Show only authorized process-local counters, including in-flight requests, duplicate acknowledgements and signed pings. Counters reset on restart, are not replica totals, and do not establish GitHub-side webhook registration or completed collection. Refresh the active subscription even without canonical data changes.",
+      "from": "webhook-status",
+      "compute": [
+        { "as": "configuration", "function": "if", "args": [{ "field": "configured" }, { "value": "Configured" }, { "value": "Not configured" }] }
+      ],
+      "limit": 1
+    },
+    {
+      "name": "ingestion-health",
+      "subject": "Show the current Redis-backed webhook and collection health snapshot.",
+      "objective": "Determine whether the reported collection, webhook, queue, and backfill state warrants inspecting ingestion diagnostics.",
+      "acceptance": "Report the observed health, queue, failure, success, and projection timestamps together; verify freshness and configuration before calling collection healthy, and treat missing state as unknown rather than zero.",
+      "from": "collection-health",
+      "select": [
+        { "field": "configured" },
+        { "field": "health" },
+        { "field": "queue-depth" },
+        { "field": "pending-tasks" },
+        { "field": "dead-letters" },
+        { "field": "oldest-pending-age" },
+        { "field": "backfill" },
+        { "field": "backfill-failures" },
+        { "field": "backfill-queued-run-tasks" },
+        { "field": "webhook-load" },
+        { "field": "collection-load" },
+        { "field": "failure-load" },
+        { "field": "last-projected" },
+        { "field": "last-webhook-at" },
+        { "field": "last-failure-at" },
+        { "field": "last-failure-code" },
+        { "field": "last-success-at" },
+        { "field": "webhook-received" },
+        { "field": "webhook-duplicate" },
+        { "field": "webhook-admission-failed" },
+        { "field": "task-queued" },
+        { "field": "task-coalesced" },
+        { "field": "collection-succeeded" },
+        { "field": "collection-failed" },
+        { "field": "collection-retried" },
+        { "field": "collection-dead-lettered" }
+      ]
+    },
+    {
+      "name": "github-api-usage",
+      "subject": "Show retained GitHub API quota usage per bucket and in aggregate over the last 24 hours.",
+      "objective": "Determine whether any GitHub App installation or the CAO fleet as a whole is approaching its GitHub API rate limit.",
+      "acceptance": "Report peak usage percentages with their limits, used, and reserved counts; treat a slot without observations as unknown rather than idle, and never infer credentials from bucket identity.",
+      "from": "github-quota-usage",
+      "select": [
+        { "field": "observed-at" },
+        { "field": "scope" },
+        { "field": "bucket" },
+        { "field": "app" },
+        { "field": "installation" },
+        { "field": "resource" },
+        { "field": "buckets" },
+        { "field": "limit" },
+        { "field": "used" },
+        { "field": "reserved" },
+        { "field": "usage-percent" }
+      ]
+    },
+    {
+      "name": "marketplace-directory",
+      "subject": "Browse packages from configured marketplace registries.",
+      "objective": "Present a stable alphabetical directory that can be loaded in bounded pages.",
+      "acceptance": "Preserve resolver-produced provenance and package metadata. Order by package name and immutable source so continuation pages neither skip nor duplicate entries; discovery grants no installation authority.",
+      "from": "marketplace-packages",
+      "order-by": [
+        { "field": "package-name", "direction": "asc" },
+        { "field": "package-source", "direction": "asc" }
+      ]
+    },
+    {
+      "name": "marketplace-package-detail",
+      "subject": "Expose normalized marketplace package records for source-coordinate lookup by the detail view.",
+      "objective": "Locate the resolver-produced package record for a source coordinate supplied by the consuming view.",
+      "acceptance": "Use the returned package-source, registry, ref, and resolved-commit fields when inspecting a matching record; the query itself does not filter by coordinate, and an absent match is not proof of package nonexistence or approval.",
+      "from": "marketplace-packages"
+    },
+    {
+      "name": "friction-by-workflow",
+      "subject": "Rank workflows by observed gh-aw audit friction AI Credit totals for investigation.",
+      "objective": "Identify which repository and workflow combinations have the largest measured friction totals in retained observations.",
+      "acceptance": "Compare friction-aic and distinct runs with the underlying measurement states and attribution evidence; do not equate a ranking with avoidable cost or a validated saving.",
+      "description": "Total gh-aw audit friction cost grouped by repository and workflow.",
+      "from": "friction",
+      "compute": [
+        {
+          "as": "positive-aic",
+          "function": "greater-than",
+          "args": [{ "field": "aic" }, { "value": 0 }]
+        },
+        {
+          "as": "repository-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            }
+          ]
+        },
+        {
+          "as": "workflow-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            },
+            {
+              "value": ":"
+            },
+            {
+              "field": "workflow"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "workflow-coordinate",
+          "repository-coordinate",
+          "workflow"
+        ],
+        "values": [
+          {
+            "field": "aic",
+            "as": "friction-aic",
+            "reducer": "sum",
+            "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] }
+          },
+          {
+            "field": "run",
+            "as": "runs",
+            "reducer": "distinct-count"
+          }
+        ]
+      },
+      "order-by": [
+        {
+          "field": "friction-aic",
+          "direction": "desc"
+        },
+        {
+          "field": "workflow-coordinate",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "friction-observations",
+      "subject": "List retained gh-aw audit friction measurements with their run context and attribution totals.",
+      "objective": "Trace each reported friction measurement to a run and distinguish counted, suppressed, and unattributed occurrences.",
+      "acceptance": "Preserve native AIC, total-run AIC, measurement state, timestamps, links, and occurrence counts; missing or unattributed evidence remains uncertain, not a verified opportunity for savings.",
+      "description": "Newest friction measurements first, preserving the native audit values and uncertainty state.",
+      "from": "friction",
+      "compute": [
+        {
+          "as": "repository-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            }
+          ]
+        },
+        {
+          "as": "friction-percent",
+          "function": "format-percent",
+          "args": [
+            {
+              "field": "friction-ratio"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "event-timestamp",
+          "as": "observed-at"
+        },
+        {
+          "field": "repository-coordinate"
+        },
+        {
+          "field": "workflow"
+        },
+        {
+          "field": "run"
+        },
+        {
+          "field": "run-link"
+        },
+        {
+          "field": "measurement-state"
+        },
+        {
+          "field": "aic"
+        },
+        {
+          "field": "total-run-aic"
+        },
+        {
+          "field": "friction-percent"
+        },
+        {
+          "field": "counted-occurrences"
+        },
+        {
+          "field": "suppressed-occurrences"
+        },
+        {
+          "field": "unattributed-occurrences"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "observed-at",
+          "direction": "desc"
+        },
+        {
+          "field": "run",
+          "direction": "desc"
+        }
+      ]
+    },
+    {
+      "name": "indexing-shard-dates",
+      "subject": "Read the activity date encoded in each retained transaction's shard filename.",
+      "objective": "Separate source shard dates from ingestion timestamps.",
+      "acceptance": "Keep every transaction and leave absent, invalid, or structural shard dates unknown; never substitute import time.",
+      "from": "transactions",
+      "compute": [
+        {
+          "as": "shard-day",
+          "function": "activity-shard-day",
+          "args": [{ "field": "payloadScope" }]
+        },
+        {
+          "as": "missing-shard-day",
+          "function": "equals-any",
+          "args": [{ "field": "shard-day" }, { "value": null }]
+        }
+      ]
+    },
+    {
+      "name": "indexing-ingestion-runs",
+      "subject": "Show retained ingestion transactions at the activity date encoded in their shard filename.",
+      "objective": "Compare reported run counts by source shard activity date, independently of import time.",
+      "acceptance": "Preserve every dated transaction, including coincident dates, all kinds, and zero counts, without grouping, limits, or page filters. Omit missing or invalid shard dates; never substitute import time. Missing counts use labeled zero-position placeholders, not measured zeroes.",
+      "from": "indexing-shard-dates",
+      "filter": {
+        "predicates": [{ "field": "missing-shard-day", "equals": false }]
+      },
+      "compute": [
+        {
+          "as": "workflow-runs",
+          "function": "coalesce",
+          "args": [{ "field": "rawRuns" }, { "value": 0 }]
+        },
+        {
+          "as": "missing-run-count",
+          "function": "equals-any",
+          "args": [{ "field": "rawRuns" }, { "value": null }]
+        },
+        {
+          "as": "run-count-status",
+          "function": "if",
+          "args": [
+            { "field": "missing-run-count" },
+            { "value": "Run count unavailable (shown at 0)" },
+            { "value": "Reported run count" }
+          ]
+        }
+      ],
+      "select": [
+        { "field": "id" },
+        { "field": "kind" },
+        { "field": "createdAt" },
+        { "field": "shard-day" },
+        { "field": "rawRuns" },
+        { "field": "workflow-runs" },
+        { "field": "run-count-status" }
+      ],
+      "order-by": [
+        {
+          "field": "shard-day",
+          "direction": "asc"
+        },
+        {
+          "field": "id",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "indexing-campaigns-table-count",
+      "subject": "Count retained campaigns rows in the dashboard database.",
+      "objective": "Provide the retained campaigns row count for the table-count diagnostic.",
+      "acceptance": "Label the result campaigns and count campaign rows in the current database; absence or zero does not establish completeness or expected campaign coverage.",
+      "from": "campaigns",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "campaigns"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "campaign",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-repositories-table-count",
+      "subject": "Count retained repositories rows in the dashboard database.",
+      "objective": "Provide the retained repositories row count for the table-count diagnostic.",
+      "acceptance": "Label the result repositories and count repository rows in the current database; absence or zero does not establish completeness or expected repository coverage.",
+      "from": "repositories",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "repositories"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "repository",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-workflows-table-count",
+      "subject": "Count retained workflows rows in the dashboard database.",
+      "objective": "Provide the retained workflows row count for the table-count diagnostic.",
+      "acceptance": "Label the result workflows and count workflow rows in the current database; absence or zero does not establish completeness or expected workflow coverage.",
+      "from": "workflows",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "workflows"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "workflow",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-runs-table-count",
+      "subject": "Count retained workflow runs rows in the dashboard database.",
+      "objective": "Provide the retained workflow runs row count for the table-count diagnostic.",
+      "acceptance": "Label the result workflow runs and count run rows in the current database; absence or zero does not establish completeness or expected execution volume.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "runs"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "run",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-domains-table-count",
+      "subject": "Count retained network domains rows in the dashboard database.",
+      "objective": "Provide the retained network domains row count for the table-count diagnostic.",
+      "acceptance": "Label the result network domains and count domain event rows in the current database; absence or zero does not prove no network activity.",
+      "from": "domains",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "domains"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "event",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-tools-table-count",
+      "subject": "Count retained tool events rows in the dashboard database.",
+      "objective": "Provide the retained tool events row count for the table-count diagnostic.",
+      "acceptance": "Label the result tool events and count tool event rows in the current database; absence or zero does not prove no tool use.",
+      "from": "tools",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "tools"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "table",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-audits-table-count",
+      "subject": "Count retained audit events rows in the dashboard database.",
+      "objective": "Provide the retained audit events row count for the table-count diagnostic.",
+      "acceptance": "Label the result audit events and count audit event rows in the current database; absence or zero does not prove no audit findings.",
+      "from": "audits",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "audits"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "event",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-issues-table-count",
+      "subject": "Count retained issue events rows in the dashboard database.",
+      "objective": "Provide the retained issue events row count for the table-count diagnostic.",
+      "acceptance": "Label the result issue events and count issue event rows in the current database; absence or zero does not prove no issues exist.",
+      "from": "issues",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "issues"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "event",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-operational-values-table-count",
+      "subject": "Count retained operational values rows in the dashboard database.",
+      "objective": "Provide the retained operational values row count for the table-count diagnostic.",
+      "acceptance": "Label the result operational values and count operational-value rows in the current database; absence or zero does not imply zero value or an evaluated outcome.",
+      "from": "operational-values",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "operationalValues"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "operational-value",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-transactions-table-count",
+      "subject": "Count retained ingestion transactions rows in the dashboard database.",
+      "objective": "Provide the retained ingestion transactions row count for the table-count diagnostic.",
+      "acceptance": "Label the result ingestion transactions and count transaction IDs in the current database; absence or zero does not establish whether upstream ingestion ran.",
+      "from": "transactions",
+      "compute": [
+        {
+          "as": "table",
+          "function": "literal",
+          "args": [
+            {
+              "value": "transactions"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "table"
+        ],
+        "values": [
+          {
+            "field": "id",
+            "as": "records",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indexing-database-table-counts",
+      "subject": "Count retained canonical dashboard database rows by table.",
+      "objective": "Compare the retained table row counts to identify tables needing further ingestion or coverage investigation.",
+      "acceptance": "Union the named table-count projections and report their table labels and counts; check source availability, retention, and separate transaction evidence before interpreting an empty or small table as an ingestion defect.",
+      "from": "indexing-campaigns-table-count",
+      "union": [
+        "indexing-repositories-table-count",
+        "indexing-workflows-table-count",
+        "indexing-runs-table-count",
+        "indexing-domains-table-count",
+        "indexing-tools-table-count",
+        "indexing-audits-table-count",
+        "indexing-issues-table-count",
+        "indexing-operational-values-table-count",
+        "indexing-transactions-table-count"
+      ],
+      "order-by": [
+        {
+          "field": "records",
+          "direction": "desc"
+        },
+        {
+          "field": "table",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "indexing-transactions",
+      "subject": "Prepare retained ingestion transactions for card presentation.",
+      "objective": "Expose transaction identity, kind, timestamp, committed-record count, and payload hash for ingestion traceability.",
+      "acceptance": "Projected fields match retained transactions without implying successful upstream coverage from a committed count or hash alone; missing transactions require a freshness and availability check.",
+      "from": "transactions",
+      "select": [
+        {
+          "field": "id"
+        },
+        {
+          "field": "kind"
+        },
+        {
+          "field": "createdAt",
+          "as": "created-at"
+        },
+        {
+          "field": "committedRecords",
+          "as": "committed-records"
+        },
+        {
+          "field": "payloadHash",
+          "as": "payload-hash"
+        }
+      ]
+    },
+    {
+      "name": "engines-models-usage",
+      "subject": "Summarize run-level AIC and token usage by agent and model identifiers without treating unavailable telemetry as zero.",
+      "objective": "Locate agent and model combinations whose observed per-run AIC or token usage merits checking against individual runs.",
+      "acceptance": "Report run counts and native minimum, mean, and maximum values only for reported metrics; inspect underlying runs for per-metric telemetry coverage and context before comparing combinations, and infer neither efficiency nor outcome value from usage alone.",
+      "description": "Observed workflow runs grouped by agent ID and model ID. AIC statistics use only positive-AIC runs; token statistics use runs that reported each token metric.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "summary",
+          "function": "concat",
+          "args": [
+            {
+              "field": "agent-id"
+            },
+            {
+              "value": " / "
+            },
+            {
+              "field": "model-id"
+            }
+          ]
+        },
+        {
+          "as": "positive-aic",
+          "function": "greater-than",
+          "args": [{ "field": "aic-total" }, { "value": 0 }]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "summary"
+        ],
+        "values": [
+          {
+            "field": "run",
+            "as": "runs",
+            "reducer": "count"
+          },
+          {
+            "field": "aic-total",
+            "as": "minimum-aic-per-run",
+            "reducer": "min",
+            "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] }
+          },
+          {
+            "field": "aic-total",
+            "as": "average-aic-per-run",
+            "reducer": "mean",
+            "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] }
+          },
+          {
+            "field": "aic-total",
+            "as": "maximum-aic-per-run",
+            "reducer": "max",
+            "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] }
+          },
+          {
+            "field": "input-tokens",
+            "as": "minimum-input-tokens-per-run",
+            "reducer": "min"
+          },
+          {
+            "field": "input-tokens",
+            "as": "average-input-tokens-per-run",
+            "reducer": "mean"
+          },
+          {
+            "field": "input-tokens",
+            "as": "maximum-input-tokens-per-run",
+            "reducer": "max"
+          },
+          {
+            "field": "output-tokens",
+            "as": "minimum-output-tokens-per-run",
+            "reducer": "min"
+          },
+          {
+            "field": "output-tokens",
+            "as": "average-output-tokens-per-run",
+            "reducer": "mean"
+          },
+          {
+            "field": "output-tokens",
+            "as": "maximum-output-tokens-per-run",
+            "reducer": "max"
+          },
+          {
+            "field": "cache-read-tokens",
+            "as": "minimum-cache-read-tokens-per-run",
+            "reducer": "min"
+          },
+          {
+            "field": "cache-read-tokens",
+            "as": "average-cache-read-tokens-per-run",
+            "reducer": "mean"
+          },
+          {
+            "field": "cache-read-tokens",
+            "as": "maximum-cache-read-tokens-per-run",
+            "reducer": "max"
+          },
+          {
+            "field": "cache-write-tokens",
+            "as": "minimum-cache-write-tokens-per-run",
+            "reducer": "min"
+          },
+          {
+            "field": "cache-write-tokens",
+            "as": "average-cache-write-tokens-per-run",
+            "reducer": "mean"
+          },
+          {
+            "field": "cache-write-tokens",
+            "as": "maximum-cache-write-tokens-per-run",
+            "reducer": "max"
+          },
+          {
+            "field": "reasoning-tokens",
+            "as": "minimum-reasoning-tokens-per-run",
+            "reducer": "min"
+          },
+          {
+            "field": "reasoning-tokens",
+            "as": "average-reasoning-tokens-per-run",
+            "reducer": "mean"
+          },
+          {
+            "field": "reasoning-tokens",
+            "as": "maximum-reasoning-tokens-per-run",
+            "reducer": "max"
+          }
+        ]
+      },
+      "select": [
+        {
+          "field": "summary"
+        },
+        {
+          "field": "runs"
+        },
+        {
+          "field": "average-aic-per-run"
+        },
+        {
+          "field": "minimum-aic-per-run"
+        },
+        {
+          "field": "maximum-aic-per-run"
+        },
+        {
+          "field": "minimum-input-tokens-per-run"
+        },
+        {
+          "field": "average-input-tokens-per-run"
+        },
+        {
+          "field": "maximum-input-tokens-per-run"
+        },
+        {
+          "field": "minimum-output-tokens-per-run"
+        },
+        {
+          "field": "average-output-tokens-per-run"
+        },
+        {
+          "field": "maximum-output-tokens-per-run"
+        },
+        {
+          "field": "minimum-cache-read-tokens-per-run"
+        },
+        {
+          "field": "average-cache-read-tokens-per-run"
+        },
+        {
+          "field": "maximum-cache-read-tokens-per-run"
+        },
+        {
+          "field": "minimum-cache-write-tokens-per-run"
+        },
+        {
+          "field": "average-cache-write-tokens-per-run"
+        },
+        {
+          "field": "maximum-cache-write-tokens-per-run"
+        },
+        {
+          "field": "minimum-reasoning-tokens-per-run"
+        },
+        {
+          "field": "average-reasoning-tokens-per-run"
+        },
+        {
+          "field": "maximum-reasoning-tokens-per-run"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "runs",
+          "direction": "desc"
+        },
+        {
+          "field": "summary",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "skill-invocations",
+      "subject": "Select observed skill invocations for skill usage analytics.",
+      "objective": "Expose skill event identity, scope, invocation counts, and failed counts for downstream usage analysis.",
+      "acceptance": "Keep each observed event and its repository/workflow attribution with native counts; missing records or failed counts alone do not establish whether a skill was useful or available.",
+      "from": "skills",
+      "select": [
+        {
+          "field": "event",
+          "as": "id"
+        },
+        {
+          "field": "name",
+          "as": "skill"
+        },
+        {
+          "field": "organization"
+        },
+        {
+          "field": "repository"
+        },
+        {
+          "field": "workflow"
+        },
+        {
+          "field": "invocation-count"
+        },
+        {
+          "field": "failed-count"
+        }
+      ]
+    },
+    {
+      "name": "skill-invocations-by-skill",
+      "subject": "Rank skills by their observed invocation count.",
+      "objective": "Identify skills with the highest observed invocation totals for follow-up inspection.",
+      "acceptance": "Sum observed invocation counts by skill and retain the rank as a usage description; do not equate popularity with effectiveness or infer unobserved invocations.",
+      "from": "skill-invocations",
+      "aggregate": {
+        "by": [
+          "skill"
+        ],
+        "values": [
+          {
+            "field": "invocation-count",
+            "as": "invocations",
+            "reducer": "sum"
+          }
+        ]
+      },
+      "order-by": [
+        {
+          "field": "invocations",
+          "direction": "desc"
+        },
+        {
+          "field": "skill",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "skill-invocations-by-workflow-totals",
+      "subject": "Rank workflows by their observed skill invocation count.",
+      "objective": "Produce repository-scoped workflow invocation totals for downstream skill-usage comparison.",
+      "acceptance": "Sum observed invocation counts by organization, repository, and workflow; totals describe recorded usage only, not success or expected adoption.",
+      "from": "skill-invocations",
+      "aggregate": {
+        "by": [
+          "organization",
+          "repository",
+          "workflow"
+        ],
+        "values": [
+          {
+            "field": "invocation-count",
+            "as": "invocations",
+            "reducer": "sum"
+          }
+        ]
+      }
+    },
+    {
+      "name": "skill-invocations-by-workflow",
+      "subject": "Present workflow skill invocation totals with drill-through navigation to the workflow dashboard.",
+      "objective": "Expose observed workflow skill invocation totals with a link to inspect each workflow.",
+      "acceptance": "Each projected workflow coordinate, link, and invocation total traces to the grouped source; using a link to investigate does not establish that usage caused an outcome.",
+      "from": "skill-invocations-by-workflow-totals",
+      "compute": [
+        {
+          "as": "workflow-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            },
+            {
+              "value": ":"
+            },
+            {
+              "field": "workflow"
+            }
+          ]
+        },
+        {
+          "as": "encoded-workflow",
+          "function": "url-encode",
+          "args": [
+            {
+              "field": "workflow-coordinate"
+            }
+          ]
+        },
+        {
+          "as": "workflow-dashboard-href",
+          "function": "concat",
+          "args": [
+            {
+              "value": "#page-workflow-runtime?workflow="
+            },
+            {
+              "field": "encoded-workflow"
+            }
+          ]
+        },
+        {
+          "as": "workflow-dashboard-label",
+          "function": "concat",
+          "args": [
+            {
+              "value": "View "
+            },
+            {
+              "field": "workflow-coordinate"
+            },
+            {
+              "value": " workflow dashboard"
+            }
+          ]
+        },
+        {
+          "as": "workflow-link",
+          "function": "dashboard-link",
+          "args": [
+            {
+              "value": ""
+            },
+            {
+              "field": "workflow-dashboard-href"
+            },
+            {
+              "field": "workflow-dashboard-label"
+            },
+            {
+              "field": "workflow-coordinate"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "workflow-coordinate"
+        },
+        {
+          "field": "workflow-link"
+        },
+        {
+          "field": "invocations"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "invocations",
+          "direction": "desc"
+        },
+        {
+          "field": "workflow-coordinate",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "skill-workflow-totals",
+      "subject": "Count observed invocations for each skill and workflow.",
+      "objective": "Produce skill-by-workflow invocation totals for the downstream inventory.",
+      "acceptance": "Sum observed invocation counts by skill, organization, repository, and workflow; missing combinations are not evidence that a skill could not run.",
+      "from": "skill-invocations",
+      "aggregate": {
+        "by": [
+          "skill",
+          "organization",
+          "repository",
+          "workflow"
+        ],
+        "values": [
+          {
+            "field": "invocation-count",
+            "as": "invocations",
+            "reducer": "sum"
+          }
+        ]
+      }
+    },
+    {
+      "name": "skill-workflow-inventory",
+      "subject": "List observed skills by workflow with drill-through navigation to the workflow dashboard.",
+      "objective": "Identify observed skill/workflow combinations and provide a workflow link for inspecting their runs.",
+      "acceptance": "Show the repository, workflow, skill, link, and observed invocation total from the grouped evidence; an absent row does not prove non-use, and a high count does not prove effectiveness.",
+      "from": "skill-workflow-totals",
+      "compute": [
+        {
+          "as": "repository-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            }
+          ]
+        },
+        {
+          "as": "workflow-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            },
+            {
+              "value": ":"
+            },
+            {
+              "field": "workflow"
+            }
+          ]
+        },
+        {
+          "as": "encoded-workflow",
+          "function": "url-encode",
+          "args": [
+            {
+              "field": "workflow-coordinate"
+            }
+          ]
+        },
+        {
+          "as": "workflow-dashboard-href",
+          "function": "concat",
+          "args": [
+            {
+              "value": "#page-workflow-runtime?workflow="
+            },
+            {
+              "field": "encoded-workflow"
+            }
+          ]
+        },
+        {
+          "as": "workflow-dashboard-label",
+          "function": "concat",
+          "args": [
+            {
+              "value": "View "
+            },
+            {
+              "field": "workflow-coordinate"
+            },
+            {
+              "value": " workflow dashboard"
+            }
+          ]
+        },
+        {
+          "as": "workflow-link",
+          "function": "dashboard-link",
+          "args": [
+            {
+              "value": ""
+            },
+            {
+              "field": "workflow-dashboard-href"
+            },
+            {
+              "field": "workflow-dashboard-label"
+            },
+            {
+              "field": "workflow-coordinate"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "skill"
+        },
+        {
+          "field": "repository-coordinate"
+        },
+        {
+          "field": "workflow"
+        },
+        {
+          "field": "workflow-link"
+        },
+        {
+          "field": "invocations"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "invocations",
+          "direction": "desc"
+        },
+        {
+          "field": "skill",
+          "direction": "asc"
+        },
+        {
+          "field": "workflow",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "experiment-assignment-coverage",
+      "subject": "Count observed run assignments for each experiment and workflow without inferring a completion target.",
+      "objective": "Expose assignment counts by experiment and workflow for investigating observed experiment coverage.",
+      "acceptance": "Count retained assignment rows in each experiment/workflow group, not distinct runs; do not invent a target, infer missing assignments from absent groups, or treat assignments as eval or grader outcomes.",
+      "from": "experiment-assignments",
+      "compute": [
+        {
+          "as": "workflow-coordinate",
+          "function": "concat",
+          "args": [
+            { "field": "organization" },
+            { "value": "/" },
+            { "field": "repository" },
+            { "value": ":" },
+            { "field": "workflow" }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": ["workflow-coordinate", "experiment"],
+        "values": [
+          { "field": "run", "as": "assignments", "reducer": "count" }
+        ]
+      }
+    },
+    {
+      "name": "eval-status-ledger",
+      "subject": "Inspect every explicitly classified eval answer, including UNKNOWN.",
+      "objective": "Expose retained eval observations with their workflow, run evidence and observation time.",
+      "acceptance": "Keep recorded YES, NO and UNKNOWN answers distinct; unknown or absent evidence must not imply success or failure, and historical answers are not current verdicts or validated operational outcomes.",
+      "from": "eval-observations",
+      "compute": [
+        { "as": "_recorded-run-href", "function": "link-href", "args": [{ "field": "evidence-link" }] },
+        { "as": "_eval-run-href", "function": "coalesce", "args": [{ "field": "_recorded-run-href" }, { "field": "evidence-link" }] },
+        { "as": "run-link", "function": "link", "args": [{ "field": "_eval-run-href" }, { "field": "run" }] }
+      ],
+      "filter": {
+        "predicates": [{ "field": "eval-result", "in": ["YES", "NO", "UNKNOWN"] }]
+      }
+    },
+    {
+      "name": "eval-answer-counts",
+      "subject": "Count recorded YES, NO and UNKNOWN answers for each workflow-scoped eval.",
+      "objective": "Provide complete answer denominators before expanding each eval into three bars.",
+      "acceptance": "Keep canonical eval identities separate and count only explicitly classified observations. Select at most 33 complete eval groups, never truncate an answer group.",
+      "from": "eval-status-ledger",
+      "aggregate": {
+        "by": ["organization", "repository", "workflow", "eval"],
+        "values": [
+          { "field": "eval-result", "as": "answers", "reducer": "count" },
+          { "field": "eval-result", "as": "yes", "reducer": "count", "filter": { "predicates": [{ "field": "eval-result", "equals": "YES" }] } },
+          { "field": "eval-result", "as": "no", "reducer": "count", "filter": { "predicates": [{ "field": "eval-result", "equals": "NO" }] } },
+          { "field": "eval-result", "as": "unknown", "reducer": "count", "filter": { "predicates": [{ "field": "eval-result", "equals": "UNKNOWN" }] } }
+        ]
+      },
+      "order-by": [
+        { "field": "eval", "direction": "asc" },
+        { "field": "organization", "direction": "asc" },
+        { "field": "repository", "direction": "asc" },
+        { "field": "workflow", "direction": "asc" }
+      ],
+      "limit": 33
+    },
+    {
+      "name": "eval-yes-shares",
+      "subject": "Compute the YES share of each eval's recorded answers.",
+      "objective": "Expose recorded YES proportions for comparing answer categories without inferring verified operational outcomes.",
+      "acceptance": "Emit one YES row per retained canonical eval group, including zero YES counts; answer-share is yes / answers across recorded YES, NO and UNKNOWN observations. Do not count absent observations.",
+      "from": "eval-answer-counts",
+      "compute": [
+        { "as": "eval-result", "function": "literal", "args": [{ "value": "YES" }] },
+        { "as": "answer-order", "function": "literal", "args": [{ "value": 0 }] },
+        { "as": "answer-share", "function": "quotient", "args": [{ "field": "yes" }, { "field": "answers" }] }
+      ]
+    },
+    {
+      "name": "eval-no-shares",
+      "subject": "Compute the NO share of each eval's recorded answers.",
+      "objective": "Expose recorded NO proportions for comparing answer categories without treating historical answers as current verdicts.",
+      "acceptance": "Emit one NO row per retained canonical eval group, including zero NO counts; answer-share is no / answers across recorded YES, NO and UNKNOWN observations. Do not count absent observations.",
+      "from": "eval-answer-counts",
+      "compute": [
+        { "as": "eval-result", "function": "literal", "args": [{ "value": "NO" }] },
+        { "as": "answer-order", "function": "literal", "args": [{ "value": 1 }] },
+        { "as": "answer-share", "function": "quotient", "args": [{ "field": "no" }, { "field": "answers" }] }
+      ]
+    },
+    {
+      "name": "eval-unknown-shares",
+      "subject": "Compute the explicit UNKNOWN share of each eval's recorded answers.",
+      "objective": "Expose explicitly recorded UNKNOWN proportions without conflating absent observations with classified uncertainty.",
+      "acceptance": "Emit one UNKNOWN row per retained canonical eval group, including zero UNKNOWN counts; answer-share is unknown / answers across recorded YES, NO and UNKNOWN observations. Missing observations are not UNKNOWN answers.",
+      "from": "eval-answer-counts",
+      "compute": [
+        { "as": "eval-result", "function": "literal", "args": [{ "value": "UNKNOWN" }] },
+        { "as": "answer-order", "function": "literal", "args": [{ "value": 2 }] },
+        { "as": "answer-share", "function": "quotient", "args": [{ "field": "unknown" }, { "field": "answers" }] }
+      ]
+    },
+    {
+      "name": "eval-answer-distribution",
+      "subject": "Compare YES, NO and UNKNOWN percentages within each eval.",
+      "objective": "Show three horizontal bars per eval that together account for all recorded answers.",
+      "acceptance": "Emit all three answer categories, including zero shares; percentages sum to 100 per canonical eval. Missing observations are not UNKNOWN answers. Preserve workflow and repository attribution.",
+      "from": "eval-yes-shares",
+      "union": ["eval-no-shares", "eval-unknown-shares"],
+      "compute": [
+        { "as": "answer-percent", "function": "product", "args": [{ "field": "answer-share" }, { "value": 100 }] },
+        { "as": "eval-label", "function": "concat", "args": [{ "field": "eval" }, { "value": " | " }, { "field": "organization" }, { "value": "/" }, { "field": "repository" }, { "value": ":" }, { "field": "workflow" }] }
+      ],
+      "order-by": [
+        { "field": "eval-label", "direction": "asc" },
+        { "field": "answer-order", "direction": "asc" }
+      ]
+    },
+    {
+      "name": "grader-observed-maxima",
+      "subject": "Find each workflow-scoped grader's maximum retained value in the selected data.",
+      "objective": "Provide an observed normalization denominator without mixing grader identities or claiming a theoretical maximum.",
+      "acceptance": "Group by canonical grader identity, not display name; ignore missing values and preserve zero or negative maxima without substituting a denominator.",
+      "from": "grader-observations",
+      "aggregate": {
+        "by": ["grader-id"],
+        "values": [{ "field": "value", "as": "max-grader-value", "reducer": "max" }]
+      }
+    },
+    {
+      "name": "grader-normalized-observations",
+      "subject": "Normalize each grader observation by that grader's observed maximum.",
+      "objective": "Compare relative grader values over time while preserving native measurements and run provenance.",
+      "acceptance": "Compute value / max-grader-value without clamping or inverting lower-is-better measures; zero or missing denominators produce null, never a fabricated zero or infinity.",
+      "from": "grader-observations",
+      "joins": [
+        {
+          "source": "grader-observed-maxima",
+          "type": "left",
+          "on": [{ "left": "grader-id", "right": "grader-id" }],
+          "fields": [{ "field": "max-grader-value", "as": "max-grader-value" }]
+        }
+      ],
+      "compute": [
+        {
+          "as": "normalized-value",
+          "function": "quotient",
+          "args": [{ "field": "value" }, { "field": "max-grader-value" }]
+        },
+        {
+          "as": "_observation-time",
+          "function": "timestamp",
+          "args": [{ "field": "observed-at" }]
+        },
+        {
+          "as": "_unplottable-value",
+          "function": "equals-any",
+          "args": [{ "field": "normalized-value" }, { "value": null }]
+        },
+        {
+          "as": "_unplottable-time",
+          "function": "equals-any",
+          "args": [{ "field": "_observation-time" }, { "value": null }]
+        },
+        {
+          "as": "grader-series",
+          "function": "concat",
+          "args": [
+            { "field": "organization" }, { "value": "/" }, { "field": "repository" },
+            { "value": " / " }, { "field": "workflow" }, { "value": " / " }, { "field": "grader" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "grader-value-scatter",
+      "subject": "Plot timed grader observations with a defined value-to-observed-maximum ratio.",
+      "objective": "Show relative grader measurements at their recorded observation times.",
+      "acceptance": "Keep each eligible observation and its run link; omit missing ratios or observation times from the plot while retaining those records in the native-value ledger. Ratios are not eval answers or evidence of improvement.",
+      "from": "grader-normalized-observations",
+      "filter": {
+        "predicates": [
+          { "field": "_unplottable-value", "equals": false },
+          { "field": "_unplottable-time", "equals": false }
+        ]
+      },
+      "order-by": [{ "field": "observed-at", "direction": "asc" }]
+    },
+    {
+      "name": "grader-status-ledger",
+      "subject": "Report grader measurements, units and explicit statuses without confusing them with binary eval answers.",
+      "objective": "Preserve numeric grader evidence and distinguish explicit per-observation pass and fail verdicts from unknown statuses.",
+      "acceptance": "Retain native grader values, units and statuses. Map only pass/passed to YES and fail/failed to NO in the auxiliary verdict field, leaving all other statuses unknown; never infer an eval answer, current success, causation or policy authority from a grader score.",
+      "from": "grader-observations",
+      "compute": [
+        {
+          "as": "is-pass",
+          "function": "equals-any",
+          "args": [{ "field": "status" }, { "value": "pass" }, { "value": "passed" }]
+        },
+        {
+          "as": "is-fail",
+          "function": "equals-any",
+          "args": [{ "field": "status" }, { "value": "fail" }, { "value": "failed" }]
+        },
+        {
+          "as": "non-pass-verdict",
+          "function": "if",
+          "args": [{ "field": "is-fail" }, { "value": "NO" }, { "value": "unknown" }]
+        },
+        {
+          "as": "verdict",
+          "function": "if",
+          "args": [
+            { "field": "is-pass" },
+            { "value": "YES" },
+            { "field": "non-pass-verdict" }
+          ]
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "id": "marketplace",
+      "kind": "custom",
+      "intent": "Find campaign packages whose documented purpose fits an operational need.",
+      "subject": "Normalized packages from the configured campaign registries.",
+      "objective": "Select a package for review before considering installation.",
+      "acceptance": "Preserve package source, identity and metadata provenance; distinguish unavailable registry data from no matches. Add commands are copy-only and use no AI; discovery grants no installation or target authority.",
+      "title": "Marketplace",
+      "navigation-label": "Marketplace",
+      "icon": "archive",
+      "class-name": "marketplace-page",
+      "retain-on-navigation": true,
+      "experimental": false,
+      "description": "Find a campaign package that addresses a specific CAO operational need.",
+      "views": [
+        {
+          "id": "marketplace-packages",
+          "title": "Campaign packages for agentic operations",
+          "description": "Explore packages from your configured registries. Select one to review it and copy an immutable cao add or gh aw add command. Adding a package does not use AI; workflows use AI when they run.",
+          "data": {
+            "source": "marketplace-directory",
+            "query-context": false
+          },
+          "mark": "list",
+          "lazy-list": true,
+          "list": {
+            "style": "entity-cards",
+            "appearance": "marketplace",
+            "layout": "grid",
+            "icon": "archive",
+            "card": "marketplace-package-summary",
+            "drill": {
+              "type": "query",
+              "page": "marketplace-package",
+              "query": "marketplace-package-detail",
+              "title-field": "package-name",
+              "arguments": [
+                {
+                  "name": "package-source",
+                  "field": "package-source"
+                }
+              ]
+            }
+          },
+          "encoding": {
+            "columns": [
+              {
+                "field": "package-name",
+                "type": "nominal",
+                "title": "Package"
+              },
+              {
+                "field": "package-description",
+                "type": "nominal",
+                "title": "Description"
+              },
+              {
+                "field": "registry-name",
+                "type": "nominal",
+                "title": "Registry"
+              }
+            ]
+          },
+          "layout": "full",
+          "empty-message": "No marketplace packages were resolved."
+        }
+      ]
+    },
+    {
+      "id": "marketplace-package",
+      "kind": "custom",
+      "intent": "Review one package's provenance, documentation and canonical add command.",
+      "subject": "The package selected by the route and its normalized registry metadata.",
+      "objective": "Make an informed package-selection decision without executing installation.",
+      "acceptance": "Show exact package source, README and metadata; keep add commands copy-only and report unavailable content. Add commands use no AI; package text is untrusted and grants no rollout authority.",
+      "title": "Package",
+      "icon": "archive",
+      "class-name": "marketplace-detail-page",
+      "description": "Verify the selected package's provenance before considering installation.",
+      "route": {
+        "hash-query-parameter": "package-source",
+        "navigation-page": "marketplace",
+        "availability-view": "marketplace-package-detail",
+        "availability-message": "CAO could not load this package. It may have been removed, or Marketplace data may be temporarily unavailable.",
+        "partial-message": "Some package information could not be retrieved. Available details are shown below."
+      },
+      "views": [
+        {
+          "id": "marketplace-package-detail",
+          "title": "Package details",
+          "data": {
+            "source": "marketplace-package-detail",
+            "arguments": [
+              {
+                "name": "package-source",
+                "field": "package-source"
+              }
+            ]
+          },
+          "mark": "list",
+          "list": {
+            "style": "entity-cards",
+            "appearance": "marketplace",
+            "icon": "archive",
+            "card": "marketplace-package"
+          },
+          "encoding": {
+            "columns": [
+              {
+                "field": "package-name",
+                "type": "nominal",
+                "title": "Package"
+              },
+              {
+                "field": "package-source",
+                "type": "nominal",
+                "title": "Source"
+              }
+            ]
+          },
+          "layout": "full",
+          "empty-message": "Package unavailable."
+        },
+        {
+          "id": "marketplace-package-readme",
+          "title": "README",
+          "data": {
+            "limit": 1,
+            "sources": [
+              "marketplace-package-detail"
+            ],
+            "arguments": [
+              {
+                "name": "package-source",
+                "field": "package-source"
+              }
+            ]
+          },
+          "mark": "element",
+          "element": "markdown",
+          "config": {
+            "content-field": "package-readme",
+            "path-field": "package-readme-path",
+            "empty-message": "This package does not publish a README."
+          },
+          "layout": "full"
+        },
+        {
+          "id": "marketplace-package-about",
+          "title": "About",
+          "data": {
+            "sources": ["marketplace-package-detail"],
+            "arguments": [
+              {
+                "name": "package-source",
+                "field": "package-source"
+              }
+            ]
+          },
+          "mark": "element",
+          "element": "link-button-list",
+          "config": {
+            "label-field": "repository",
+            "link-field": "repository-link",
+            "icon-field": "package-icon",
+            "fallback-icon": "archive",
+            "empty-message": "No related materials are available."
+          },
+          "layout": "full"
+        }
+      ],
+      "sections": [
+        {
+          "id": "package",
+          "title": "Package",
+          "layout": "full",
+          "views": [
+            "marketplace-package-detail"
+          ]
+        },
+        {
+          "id": "readme",
+          "title": "README",
+          "layout": "wide",
+          "views": [
+            "marketplace-package-readme"
+          ]
+        },
+        {
+          "id": "about",
+          "title": "About",
+          "layout": "narrow",
+          "views": [
+            "marketplace-package-about"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "indexing",
+      "kind": "custom",
+      "intent": "Determine whether collection, ingestion and retained data are healthy enough for analysis.",
+      "subject": "Server collection health, API usage, ingestion queues, shards and retained transactions.",
+      "objective": "Locate evidence gaps and bottlenecks before trusting dashboard conclusions.",
+      "acceptance": "Show native states, timestamps, counts, sizes and units with backend limitations; preserve failures and partial/unavailable evidence. Empty queues or tables alone do not establish successful collection.",
+      "title": "Ingestion",
+      "navigation-label": "Ingestion",
+      "icon": "database",
+      "experimental": false,
+      "description": "Determine whether the evidence pipeline supports reliable CAO analysis.",
+      "views": [
+        {
+          "id": "ingestion-storage",
+          "title": "Data storage",
+          "objective": "Identify the configured storage engine and location. This source-free element reads deployment configuration, not activity evidence; a database query cannot identify the browser's storage configuration.",
+          "data": { "sources": [] },
+          "mark": "element",
+          "element": "storage-info",
+          "layout": "full"
+        },
+        {
+          "id": "indexing-database-table-counts",
+          "title": "Database table counts",
+          "subject": "Compare retained row counts across dashboard database tables.",
+          "objective": "Identify missing or unexpectedly sized data tables for ingestion review.",
+          "acceptance": "Counts are used as ingestion diagnostics, not as proof of source completeness.",
+          "description": "Rows retained by canonical database table or object-store name, including transactions.",
+          "data": {
+            "source": "indexing-database-table-counts",
+            "query-context": false,
+            "limit": 100
+          },
+          "mark": "chart",
+          "chart": "horizontal-bar",
+          "layout": "full",
+          "empty-message": "No canonical dashboard rows have been retained.",
+          "encoding": {
+            "x": {
+              "field": "table",
+              "type": "nominal",
+              "title": "Table"
+            },
+            "y": {
+              "field": "records",
+              "type": "quantitative",
+              "title": "Rows"
+            }
+          }
+        },
+        {
+          "id": "ingested-shards",
+          "title": "Ingested shards",
+          "subject": "Inspect retained Activity shard import receipts.",
+          "objective": "Trace imported shards and investigate stale dashboard evidence.",
+          "acceptance": "Display retained shard paths, kind, status, import times, record counts and hashes. Unknown fields remain unknown and successful imports do not establish upstream freshness.",
+          "description": "Retained shard receipts show the source path, import time, committed records and payload hash. Importing an old shard does not make its workflow evidence current.",
+          "data": { "source": "indexing-shards", "query-context": false },
+          "mark": "list",
+          "list": { "style": "entity-cards", "card": "ingested-shard", "icon": "database" },
+          "layout": "full",
+          "empty-message": "No shard import receipts are available. Shard coverage and freshness are unknown.",
+          "encoding": {
+            "columns": [
+              { "field": "shard", "title": "Shard", "type": "nominal" },
+              { "field": "kind", "title": "Import kind", "type": "nominal" },
+              { "field": "status", "title": "Status", "type": "nominal", "display": "status" },
+              { "field": "ingested-at", "title": "Ingested at", "type": "temporal", "format": "human-friendly-timestamp" },
+              { "field": "committed-records", "title": "Committed records", "type": "quantitative" },
+              { "field": "workflow-runs", "title": "Workflow runs", "type": "quantitative" },
+              { "field": "payload-hash", "title": "Payload hash", "type": "nominal" }
+            ]
+          }
+        },
+        {
+          "id": "ingestion-webhook-status",
+          "title": "Webhook counters (process-local, since restart)",
+          "requires": { "backend": "hosted", "on-unavailable": "hide" },
+          "subject": "Inspect webhook validation and HTTP outcomes observed by this server process.",
+          "objective": "Spot invalid signatures, failed admission and active webhook traffic without querying GitHub.",
+          "acceptance": "Display process-local counts and last-observed timestamps; missing or unauthorized evidence is unavailable, not zero. Acknowledged pings do not prove current GitHub registration and acknowledgements do not mean collection has completed.",
+          "description": "Live counters for this server process, refreshed every 30 seconds while this view is open. Reset on restart; not aggregated across replicas. Verified means valid HMAC, acknowledged means HTTP acceptance, and duplicate and ping counts overlap acknowledgements. A ping does not prove current GitHub-side registration.",
+          "data": { "source": "ingestion-webhook-status", "query-context": false, "limit": 1 },
+          "mark": "list",
+          "list": { "style": "entity-cards", "card": "webhook-status", "icon": "broadcast" },
+          "layout": "full",
+          "empty-message": "Live webhook counters are unavailable. No traffic or registration state can be inferred.",
+          "encoding": {
+            "columns": [
+              { "field": "configured", "type": "nominal", "title": "Configured" },
+              { "field": "received", "type": "quantitative", "title": "Received" },
+              { "field": "in-flight", "type": "quantitative", "title": "In flight" },
+              { "field": "verified", "type": "quantitative", "title": "HMAC verified" },
+              { "field": "accepted", "type": "quantitative", "title": "Acknowledged" },
+              { "field": "rejected", "type": "quantitative", "title": "Rejected" },
+              { "field": "failed", "type": "quantitative", "title": "Failed" },
+              { "field": "duplicates", "type": "quantitative", "title": "Duplicates" },
+              { "field": "pings", "type": "quantitative", "title": "Signed pings" },
+              { "field": "last-received-at", "type": "temporal", "title": "Last delivery", "format": "human-friendly-timestamp" },
+              { "field": "last-accepted-at", "type": "temporal", "title": "Last acknowledgement", "format": "human-friendly-timestamp" },
+              { "field": "last-failure-at", "type": "temporal", "title": "Last failure", "format": "human-friendly-timestamp" },
+              { "field": "last-ping-at", "type": "temporal", "title": "Last signed ping", "format": "human-friendly-timestamp" }
+            ]
+          }
+        },
+        {
+          "id": "ingestion-queue-sizes",
+          "title": "Server collection workload (administrators)",
+          "requires": {
+            "backend": "hosted",
+            "on-unavailable": "hide"
+          },
+          "subject": "Compare the current shared collection queue and in-flight work with cumulative historical backfill admissions.",
+          "objective": "Detect a collection backlog while distinguishing the historical volume of backfill work.",
+          "acceptance": "Display only authorized server observations; backfill admissions are cumulative, not an outstanding queue, and unavailable or unconfigured state is not zero.",
+          "description": "Ready and scheduled work includes webhook and backfill tasks; in-flight tasks are leased. Backfill admitted is a cumulative total, not a current backlog. Available only to server administrators.",
+          "data": { "source": "ingestion-queue-sizes", "limit": 3 },
+          "mark": "chart",
+          "chart": "horizontal-bar",
+          "layout": "full",
+          "empty-message": "Collection queue sizes are available only to server administrators when collection is configured.",
+          "encoding": {
+            "x": { "field": "queue", "type": "nominal", "title": "Queue" },
+            "y": { "field": "tasks", "type": "quantitative", "title": "Tasks" }
+          }
+        },
+        {
+          "id": "ingestion-health-status",
+          "title": "Collection health",
+          "requires": {
+            "backend": "hosted",
+            "on-unavailable": "hide"
+          },
+          "description": "Live webhook admission, queue, retry, and collection health from the server-side collection profile.",
+          "data": {
+            "source": "ingestion-health"
+          },
+          "mark": "table",
+          "layout": "full",
+          "empty-message": "Live collection health is available when connected to a server-side collection profile.",
+          "encoding": {
+            "columns": [
+              { "field": "health", "type": "nominal", "title": "Health", "display": "status" },
+              { "field": "queue-depth", "type": "quantitative", "title": "Queued" },
+              { "field": "pending-tasks", "type": "quantitative", "title": "In flight" },
+              { "field": "dead-letters", "type": "quantitative", "title": "Dead letters" },
+              { "field": "backfill-queued-run-tasks", "type": "quantitative", "title": "Backfill admitted (total)" },
+              { "field": "backfill-failures", "type": "quantitative", "title": "Backfill failures" },
+              { "field": "oldest-pending-age", "type": "nominal", "title": "Oldest in flight" },
+              { "field": "webhook-load", "type": "quantitative", "title": "Webhook load (60s half-life)" },
+              { "field": "collection-load", "type": "quantitative", "title": "Collection load (60s half-life)" },
+              { "field": "failure-load", "type": "quantitative", "title": "Failure load (60s half-life)" },
+              { "field": "webhook-received", "type": "quantitative", "title": "Deliveries" },
+              { "field": "webhook-duplicate", "type": "quantitative", "title": "Duplicates" },
+              { "field": "webhook-admission-failed", "type": "quantitative", "title": "Admission failures" },
+              { "field": "collection-succeeded", "type": "quantitative", "title": "Succeeded" },
+              { "field": "collection-failed", "type": "quantitative", "title": "Failed" },
+              { "field": "collection-retried", "type": "quantitative", "title": "Retried" },
+              { "field": "collection-dead-lettered", "type": "quantitative", "title": "Dead-lettered" },
+              { "field": "last-failure-code", "type": "nominal", "title": "Latest failure" },
+              { "field": "last-failure-at", "type": "temporal", "title": "Failure time", "format": "human-friendly-timestamp" },
+              { "field": "last-success-at", "type": "temporal", "title": "Success time", "format": "human-friendly-timestamp" },
+              { "field": "last-webhook-at", "type": "temporal", "title": "Last delivery", "format": "human-friendly-timestamp" },
+              { "field": "last-projected", "type": "temporal", "title": "Last projection", "format": "human-friendly-timestamp" },
+              { "field": "backfill", "type": "nominal", "title": "Backfill" }
+            ]
+          }
+        },
+        {
+          "id": "github-api-usage",
+          "title": "GitHub API usage",
+          "requires": {
+            "backend": "hosted",
+            "on-unavailable": "hide"
+          },
+          "subject": "Track the share of GitHub API quota consumed by each CAO bucket over the last 24 hours.",
+          "objective": "Spot GitHub App installations approaching their rate limit before collection or other GitHub-backed work is throttled.",
+          "acceptance": "Each point is the peak observed usage in the hour; usage is read against the bucket's reset window and parking state, and a missing point means no observation rather than zero usage.",
+          "description": "Peak hourly percentage of GitHub API quota used per App installation and resource, with the limit-weighted total across all buckets.",
+          "data": {
+            "source": "github-api-usage"
+          },
+          "mark": "chart",
+          "chart": "line",
+          "layout": "full",
+          "empty-message": "GitHub API usage is available to administrators when connected to a server that records GitHub quota observations.",
+          "encoding": {
+            "x": { "field": "observed-at", "type": "temporal", "format": "human-friendly-timestamp", "time-unit": "hour", "title": "Hour" },
+            "y": { "field": "usage-percent", "type": "quantitative", "aggregate": "max", "title": "Quota used (%)" },
+            "color": { "field": "bucket", "type": "nominal", "title": "Bucket" }
+          }
+        },
+        {
+          "id": "indexing-workflow-runs",
+          "title": "Runs per ingestion",
+          "subject": "Track the reported run count of every retained ingestion entry.",
+          "objective": "Identify changes in run volume by the activity date encoded in each source shard filename, not its import time.",
+          "acceptance": "Every transaction with a valid shard activity date is represented without date bucketing or aggregation; unavailable dates are not replaced by import time and unavailable counts are labeled, not inferred as measured zeroes.",
+          "description": "Entries are positioned by the UTC activity date in the source shard filename, not when imported. Entries without a valid shard date are not plotted. Missing run counts are labeled and shown at 0 as placeholders, not measured zeroes. Reported counts are input runs, not distinct retained runs.",
+          "data": {
+            "source": "indexing-ingestion-runs",
+            "query-context": false
+          },
+          "mark": "chart",
+          "chart": "scatter",
+          "scatter": { "cluster": false },
+          "layout": "full",
+          "empty-message": "No ingestion entries with a valid shard activity date have been retained.",
+          "encoding": {
+            "x": {
+              "field": "shard-day",
+              "type": "temporal",
+              "format": "human-friendly-timestamp",
+              "title": "Shard activity date"
+            },
+            "y": {
+              "field": "workflow-runs",
+              "type": "quantitative",
+              "title": "Ingested runs"
+            },
+            "color": {
+              "field": "run-count-status",
+              "type": "nominal",
+              "title": "Run count"
+            }
+          }
+        },
+        {
+          "id": "transaction-entries",
+          "title": "Ingestion transactions",
+          "description": "Retained transactions show the time, committed record volume, and payload hash for each ingestion operation.",
+          "data": {
+            "source": "indexing-transactions",
+            "order-by": [
+              {
+                "field": "created-at",
+                "direction": "desc"
+              }
+            ]
+          },
+          "mark": "list",
+          "list": {
+            "style": "entity-cards",
+            "card": "ingestion-transaction",
+            "icon": "database"
+          },
+          "layout": "full",
+          "empty-message": "No ingestion transactions have been retained.",
+          "encoding": {
+            "columns": [
+              {
+                "field": "created-at",
+                "type": "temporal",
+                "title": "Committed at",
+                "format": "human-friendly-timestamp"
+              },
+              {
+                "field": "committed-records",
+                "type": "quantitative",
+                "title": "Committed records"
+              },
+              {
+                "field": "payload-hash",
+                "type": "nominal",
+                "title": "Payload hash"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "skills",
+      "kind": "custom",
+      "intent": "Determine which skill-usage pattern needs workflow-level investigation.",
+      "subject": "Retained skill invocation observations in the selected scope and horizon.",
+      "objective": "Locate skill-usage evidence for workflow-level investigation.",
+      "acceptance": "Count observed invocations by skill and workflow, retain drill-down identity and disclose coverage. Invocation volume is not proof of skill quality, success or operational value.",
+      "title": "Skills",
+      "navigation-label": "Skills",
+      "icon": "tools",
+      "experimental": true,
+      "description": "Identify skill-usage patterns that require workflow-level CAO investigation.",
+      "views": [
+        {
+          "id": "skills-most-invoked",
+          "title": "Most invoked skills",
+          "subject": "Rank skills by observed invocation count.",
+          "objective": "Choose heavily used skills for closer usage review.",
+          "acceptance": "Counts describe recorded invocations, not successful use or operational value.",
+          "description": "Skills ranked by observed invocation count.",
+          "data": {
+            "source": "skill-invocations-by-skill",
+            "order-by": [
+              {
+                "field": "invocations",
+                "direction": "desc"
+              }
+            ],
+            "limit": 10
+          },
+          "mark": "chart",
+          "chart": "horizontal-bar",
+          "layout": "full",
+          "empty-message": "No skill invocations were observed.",
+          "encoding": {
+            "x": {
+              "field": "skill",
+              "type": "nominal",
+              "title": "Skill"
+            },
+            "y": {
+              "field": "invocations",
+              "type": "quantitative",
+              "title": "Invocations"
+            }
+          }
+        },
+        {
+          "id": "skills-by-workflow",
+          "title": "Skill invocations per workflow",
+          "subject": "Compare observed skill invocation counts across workflows.",
+          "objective": "Identify workflows whose skill usage warrants inspection.",
+          "acceptance": "Counts are checked against workflow evidence before drawing conclusions about effectiveness.",
+          "description": "Workflows ranked by their observed skill invocation count.",
+          "data": {
+            "source": "skill-invocations-by-workflow",
+            "order-by": [
+              {
+                "field": "invocations",
+                "direction": "desc"
+              }
+            ],
+            "limit": 100
+          },
+          "mark": "chart",
+          "chart": "horizontal-bar",
+          "layout": "full",
+          "empty-message": "No workflow skill invocations were observed.",
+          "encoding": {
+            "x": {
+              "field": "workflow-coordinate",
+              "type": "nominal",
+              "title": "Workflow"
+            },
+            "y": {
+              "field": "invocations",
+              "type": "quantitative",
+              "title": "Invocations"
+            },
+            "href": {
+              "field": "workflow-link"
+            }
+          }
+        },
+        {
+          "id": "skills-workflow-inventory",
+          "title": "Skills by workflow",
+          "description": "Observed skills and invocation counts for each workflow.",
+          "data": {
+            "source": "skill-workflow-inventory"
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "lazy-list": true,
+          "column-summaries": true,
+          "layout": "full-view",
+          "empty-message": "No skill invocations were observed.",
+          "encoding": {
+            "href": {
+              "field": "workflow-link"
+            },
+            "columns": [
+              {
+                "field": "skill",
+                "type": "nominal",
+                "title": "Skill"
+              },
+              {
+                "field": "workflow",
+                "type": "nominal",
+                "title": "Workflow",
+                "display": "workflow-link",
+                "format": "workflow-relative-path"
+              },
+              {
+                "field": "repository-coordinate",
+                "type": "nominal",
+                "title": "Repository"
+              },
+              {
+                "field": "invocations",
+                "type": "quantitative",
+                "title": "Invocations"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "engines-models",
+      "kind": "custom",
+      "intent": "Determine which agent-model combination needs cost or reliability investigation.",
+      "subject": "Retained workflow runs with engine, requested/resolved model and usage telemetry.",
+      "objective": "Identify combinations requiring cost or reliability investigation.",
+      "acceptance": "Keep engine/model identity and unknown values explicit; distinguish AIC from raw tokens and preserve token classes, units and time bounds. Do not infer model quality or missing cost from usage volume.",
+      "title": "Models & Agents",
+      "description": "Identify the agent-model combination that most requires investigation.",
+      "icon": "sparkles-fill",
+      "views": [
+        {
+          "id": "engines-models-distribution",
+          "title": "Agent and model distribution",
+          "subject": "Compare observed run counts by agent and model combination.",
+          "objective": "Identify the combinations to examine in run-level evidence.",
+          "acceptance": "The distribution describes observed usage only, not quality or model preference.",
+          "description": "Distribution of observed workflow runs by agent and model combination.",
+          "data": {
+            "source": "engines-models-usage"
+          },
+          "mark": "chart",
+          "chart": "pie",
+          "empty-message": "No agent or model usage metadata is available.",
+          "layout": "full",
+          "encoding": {
+            "x": {
+              "field": "summary",
+              "type": "nominal",
+              "title": "Agent / model"
+            },
+            "y": {
+              "field": "runs",
+              "type": "quantitative",
+              "title": "Runs"
+            }
+          }
+        },
+        {
+          "id": "engines-models-cost",
+          "title": "Average AIC per run",
+          "subject": "Compare observed average AI Credit cost per run by agent and model combination.",
+          "objective": "Identify combinations whose cost merits further review.",
+          "acceptance": "Cost differences are interpreted alongside underlying run evidence, not as proof of efficiency or causality.",
+          "description": "Average AI Credit cost per observed workflow run by agent and model combination.",
+          "data": {
+            "source": "engines-models-usage",
+            "order-by": [
+              {
+                "field": "average-aic-per-run",
+                "direction": "desc"
+              }
+            ],
+            "limit": 100
+          },
+          "mark": "chart",
+          "chart": "horizontal-bar",
+          "empty-message": "No AI Credit cost data is available for agent and model combinations.",
+          "layout": "full",
+          "encoding": {
+            "x": {
+              "field": "summary",
+              "type": "nominal",
+              "title": "Agent / model"
+            },
+            "y": {
+              "field": "average-aic-per-run",
+              "type": "quantitative",
+              "title": "Average AIC per run",
+              "unit": "aic-per-run"
+            }
+          }
+        },
+        {
+          "id": "engines-models-token-insights",
+          "title": "Token statistics per observed run",
+          "description": "Minimum, average, and maximum token counts for each agent and model combination. Telemetry is partial: blank values mean no run reported that token class.",
+          "data": {
+            "source": "engines-models-usage"
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "empty-message": "No agent or model usage metadata is available.",
+          "layout": "full-view",
+          "encoding": {
+            "columns": [
+              {
+                "field": "summary",
+                "type": "nominal",
+                "title": "Agent / model"
+              },
+              {
+                "field": "runs",
+                "type": "quantitative",
+                "title": "Observed runs"
+              },
+              {
+                "field": "minimum-input-tokens-per-run",
+                "type": "quantitative",
+                "title": "Input minimum"
+              },
+              {
+                "field": "average-input-tokens-per-run",
+                "type": "quantitative",
+                "title": "Input average"
+              },
+              {
+                "field": "maximum-input-tokens-per-run",
+                "type": "quantitative",
+                "title": "Input maximum"
+              },
+              {
+                "field": "minimum-output-tokens-per-run",
+                "type": "quantitative",
+                "title": "Output minimum"
+              },
+              {
+                "field": "average-output-tokens-per-run",
+                "type": "quantitative",
+                "title": "Output average"
+              },
+              {
+                "field": "maximum-output-tokens-per-run",
+                "type": "quantitative",
+                "title": "Output maximum"
+              },
+              {
+                "field": "minimum-cache-read-tokens-per-run",
+                "type": "quantitative",
+                "title": "Cache read minimum"
+              },
+              {
+                "field": "average-cache-read-tokens-per-run",
+                "type": "quantitative",
+                "title": "Cache read average"
+              },
+              {
+                "field": "maximum-cache-read-tokens-per-run",
+                "type": "quantitative",
+                "title": "Cache read maximum"
+              },
+              {
+                "field": "minimum-cache-write-tokens-per-run",
+                "type": "quantitative",
+                "title": "Cache write minimum"
+              },
+              {
+                "field": "average-cache-write-tokens-per-run",
+                "type": "quantitative",
+                "title": "Cache write average"
+              },
+              {
+                "field": "maximum-cache-write-tokens-per-run",
+                "type": "quantitative",
+                "title": "Cache write maximum"
+              },
+              {
+                "field": "minimum-reasoning-tokens-per-run",
+                "type": "quantitative",
+                "title": "Reasoning minimum"
+              },
+              {
+                "field": "average-reasoning-tokens-per-run",
+                "type": "quantitative",
+                "title": "Reasoning average"
+              },
+              {
+                "field": "maximum-reasoning-tokens-per-run",
+                "type": "quantitative",
+                "title": "Reasoning maximum"
+              }
+            ]
+          },
+          "lazy-list": true
+        }
+      ],
+      "navigation-label": "Models & Agents",
+      "description": "Compare observed agent and model combinations from workflow runs."
+    },
+    {
+      "id": "friction",
+      "kind": "custom",
+      "intent": "Identify workflows with audit-attributed execution friction worth investigating.",
+      "subject": "Retained gh-aw audit friction observations and attributed cost.",
+      "objective": "Prioritize evidence-backed efficiency improvements.",
+      "acceptance": "Preserve finding type, workflow/run association, cost units and provenance; distinguish audit attribution from verified avoidable spend. Missing audits are not zero friction or proof of efficiency.",
+      "title": "Friction",
+      "navigation-label": "Friction",
+      "icon": "pulse",
+      "description": "Identify audit-attributed execution friction that warrants CAO efficiency work.",
+      "views": [
+        {
+          "id": "friction-by-workflow",
+          "title": "Friction cost by workflow",
+          "subject": "Compare measured friction AI Credit cost across workflows.",
+          "objective": "Prioritize workflows for review of avoidable cost evidence.",
+          "acceptance": "A cost is treated as a measured signal, not a confirmed saving until the supporting evidence is reviewed.",
+          "description": "The share of measured avoidable AI Credit cost attributed to each workflow.",
+          "data": {
+            "source": "friction-by-workflow",
+            "order-by": [
+              { "field": "friction-aic", "direction": "desc" },
+              { "field": "workflow-coordinate", "direction": "asc" }
+            ],
+            "limit": 10
+          },
+          "mark": "chart",
+          "chart": "pie",
+          "layout": "full",
+          "empty-message": "No gh-aw audit friction measurements were observed.",
+          "encoding": {
+            "x": {
+              "field": "workflow-coordinate",
+              "type": "nominal",
+              "title": "Workflow"
+            },
+            "y": {
+              "field": "friction-aic",
+              "type": "quantitative",
+              "title": "Friction AIC",
+              "unit": "aic"
+            }
+          }
+        },
+        {
+          "id": "friction-observations",
+          "title": "Friction observations",
+          "description": "Run-level gh-aw audit measurements, including attribution coverage and native friction ratio.",
+          "data": {
+            "source": "friction-observations",
+            "limit": 100
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "lazy-list": true,
+          "column-summaries": true,
+          "layout": "full-view",
+          "empty-message": "No gh-aw audit friction measurements were observed.",
+          "encoding": {
+            "columns": [
+              {
+                "field": "observed-at",
+                "type": "temporal",
+                "title": "Observed",
+                "format": "human-friendly-timestamp"
+              },
+              {
+                "field": "repository-coordinate",
+                "type": "nominal",
+                "title": "Repository"
+              },
+              {
+                "field": "workflow",
+                "type": "nominal",
+                "title": "Workflow",
+                "format": "workflow-relative-path"
+              },
+              {
+                "field": "run",
+                "type": "nominal",
+                "title": "Run",
+                "display": "run-link"
+              },
+              {
+                "field": "measurement-state",
+                "type": "nominal",
+                "title": "Measurement",
+                "display": "status"
+              },
+              {
+                "field": "aic",
+                "type": "quantitative",
+                "title": "Friction AIC",
+                "unit": "aic"
+              },
+              {
+                "field": "total-run-aic",
+                "type": "quantitative",
+                "title": "Run AIC",
+                "unit": "aic"
+              },
+              {
+                "field": "friction-percent",
+                "type": "nominal",
+                "title": "Friction ratio"
+              },
+              {
+                "field": "counted-occurrences",
+                "type": "quantitative",
+                "title": "Counted"
+              },
+              {
+                "field": "suppressed-occurrences",
+                "type": "quantitative",
+                "title": "Suppressed"
+              },
+              {
+                "field": "unattributed-occurrences",
+                "type": "quantitative",
+                "title": "Unattributed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "maintenance",
+      "kind": "custom",
+      "intent": "Identify repositories whose compiler provenance warrants maintenance review.",
+      "subject": "Repository workflow compiler versions and retained update-confidence evidence.",
+      "objective": "Prioritize safe maintenance proposals using known version provenance.",
+      "acceptance": "Distinguish registration, observed version and update confidence; preserve unknown provenance and refresh guidance. Do not infer outdatedness from missing data or execute updates without approval.",
+      "title": "Updates",
+      "navigation-label": "Updates",
+      "navigation-indicator": {
+        "label": "updates available",
+        "any": [
+          "maintenance-campaign-updates",
+          "maintenance-repository-upgrades"
+        ]
+      },
+      "icon": "tools",
+      "class-name": "maintenance-page",
+      "description": "Identify repositories whose compiler provenance justifies a CAO maintenance proposal.",
+      "route": {
+        "tab": "repositories",
+        "tabs": [
+          { "id": "repositories", "label": "Repositories", "icon": "repo", "page": "maintenance" },
+          { "id": "campaigns", "label": "Campaigns", "icon": "workflow", "page": "maintenance-campaigns" }
+        ]
+      },
+      "views": [
+        {
+          "id": "maintenance-repositories",
+          "title": "Repositories",
+          "description": "Installed and current gh-aw compiler versions observed for each repository. Select a repository to open its GitHub home page.",
+          "data": {
+            "source": "maintenance-repositories"
+          },
+          "mark": "list",
+          "empty-message": "No Agentic Workflow compiler versions were observed.",
+          "encoding": {
+            "columns": [
+              {
+                "field": "repository",
+                "type": "nominal",
+                "title": "Repository"
+              },
+              {
+                "field": "gh-aw-version",
+                "type": "nominal",
+                "title": "Installed"
+              },
+              {
+                "field": "gh-aw-current-version",
+                "type": "nominal",
+                "title": "Latest"
+              },
+              {
+                "field": "upgrade-state",
+                "type": "nominal",
+                "title": "Upgrade",
+                "display": "status"
+              }
+            ]
+          },
+          "layout": "full",
+          "list": {
+            "style": "entity-cards",
+            "card": "maintenance-repository",
+            "icon": "repo",
+            "action": "upgrade-repository",
+            "action-context": ["repository"],
+            "actions": ["add-repository"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "maintenance-campaigns",
+      "kind": "custom",
+      "intent": "Identify installed campaign packages requiring a version and provenance review.",
+      "subject": "Campaign package registrations, versions and update-confidence evidence.",
+      "objective": "Choose evidence-backed campaign maintenance without expanding rollout.",
+      "acceptance": "Keep installed/source version identity and confidence distinct from active registration; report unknown provenance. Updating must preserve campaign ownership and reviewed policy and require explicit operational approval.",
+      "title": "Updates",
+      "description": "Identify campaign packages whose version provenance justifies a CAO maintenance proposal.",
+      "icon": "tools",
+      "class-name": "maintenance-page",
+      "route": {
+        "navigation-page": "maintenance",
+        "tab": "campaigns",
+        "tabs": [
+          { "id": "repositories", "label": "Repositories", "icon": "repo", "page": "maintenance" },
+          { "id": "campaigns", "label": "Campaigns", "icon": "workflow", "page": "maintenance-campaigns" }
+        ]
+      },
+      "views": [
+        {
+          "id": "maintenance-campaigns",
+          "title": "CAO packages",
+          "description": "Installed campaign revisions and the latest catalog revisions observed for this control repository. Unknown update confidence does not mean the package is current.",
+          "data": {
+            "source": "campaigns"
+          },
+          "mark": "list",
+          "empty-message": "No CAO campaign packages were observed.",
+          "encoding": {
+            "columns": [
+              {
+                "field": "campaign-name",
+                "type": "nominal",
+                "title": "Package"
+              },
+              {
+                "field": "campaign-version",
+                "type": "nominal",
+                "title": "Installed"
+              },
+              {
+                "field": "campaign-current-version",
+                "type": "nominal",
+                "title": "Latest"
+              },
+              {
+                "field": "campaign-update-state",
+                "type": "nominal",
+                "title": "Update confidence",
+                "display": "status"
+              },
+              {
+                "field": "campaign-registration",
+                "type": "nominal",
+                "title": "Registration",
+                "display": "active-state"
+              }
+            ]
+          },
+          "layout": "full",
+          "list": {
+            "style": "entity-cards",
+            "card": "maintenance-campaign",
+            "icon": "workflow",
+            "action": "update-repository",
+            "action-context": ["campaign"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "experiments",
+      "kind": "custom",
+      "intent": "Inspect which workflow runs have recorded experiment assignments.",
+      "subject": "Retained run-linked assignments grouped by workflow and experiment.",
+      "objective": "Assess assignment evidence before designing an experiment comparison.",
+      "acceptance": "Show assignment counts and identities with coverage limits. Audit evidence does not establish campaign milestones or target assignments; counts are not completion percentages or proof of treatment effects.",
+      "title": "Experiments",
+      "icon": "beaker",
+      "experimental": true,
+      "description": "Assess whether retained experiment assignments are sufficient for a bounded comparison.",
+      "views": [
+        {
+          "id": "experiments-assignment-chart",
+          "title": "Observed assignments by workflow and experiment",
+          "subject": "Compare retained experiment assignments across workflows and experiments.",
+          "objective": "Identify assignment coverage that needs inspection before interpreting experimental evidence.",
+          "acceptance": "An assignment count is treated as observation coverage, not as an experiment result or effect.",
+          "data": {
+            "source": "experiment-assignment-coverage",
+            "order-by": [{ "field": "assignments", "direction": "desc" }],
+            "limit": 100
+          },
+          "mark": "chart",
+          "chart": "horizontal-bar",
+          "layout": "full",
+          "empty-message": "No experiment assignments were observed.",
+          "encoding": {
+            "x": { "field": "experiment", "type": "nominal", "title": "Experiment" },
+            "section": { "field": "workflow-coordinate", "type": "nominal", "title": "Repository / Workflow" },
+            "y": { "field": "assignments", "type": "quantitative", "title": "Observed assignments" }
+          }
+        },
+        {
+          "id": "experiments-assignments",
+          "title": "Run assignments",
+          "description": "Explicit observed variants for retained runs. Assignments are not experiment outcomes or treatment effects.",
+          "data": {
+            "source": "experiment-assignments",
+            "order-by": [
+              { "field": "workflow", "direction": "asc" },
+              { "field": "assignment-at", "direction": "desc" }
+            ]
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "lazy-list": true,
+          "layout": "full-view",
+          "empty-message": "No experiment assignments were observed.",
+          "encoding": {
+            "columns": [
+              { "field": "experiment", "type": "nominal", "title": "Experiment" },
+              { "field": "variant", "type": "nominal", "title": "Assigned variant" },
+              { "field": "workflow", "type": "nominal", "title": "Workflow" },
+              { "field": "repository", "type": "nominal", "title": "Repository" },
+              { "field": "run", "type": "nominal", "title": "Run" },
+              { "field": "assignment-at", "type": "temporal", "title": "Observed at", "format": "human-friendly-timestamp" },
+              { "field": "assignment-link", "type": "nominal", "title": "Evidence", "format": "workflow-run-url" }
+            ]
+          }
+        },
+        {
+          "id": "experiments-definitions",
+          "disclosure": "supplemental",
+          "description": "Experiment definitions discovered in run-level audit evidence. Missing campaign progress targets are not inferred.",
+          "data": { "source": "experiments" },
+          "mark": "table",
+          "controls": "interactive",
+          "lazy-list": true,
+          "layout": "full-view",
+          "empty-message": "No experiment definitions were observed.",
+          "encoding": {
+            "columns": [
+              { "field": "experiment-name", "type": "nominal", "title": "Experiment" },
+              { "field": "workflow", "type": "nominal", "title": "Workflow" },
+              { "field": "repository", "type": "nominal", "title": "Repository" },
+              { "field": "last-observation", "type": "temporal", "title": "Last observed", "format": "human-friendly-timestamp" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "evals",
+      "kind": "custom",
+      "intent": "Inspect retained eval answers by workflow without mistaking history for current verdicts.",
+      "subject": "Timestamped native YES, NO and UNKNOWN eval observations.",
+      "objective": "Locate evaluation evidence and gaps for further investigation.",
+      "acceptance": "Keep eval identity, workflow, observation time and provenance; label only explicit YES/NO answers as such. UNKNOWN remains distinct; absent authoritative current-result pointers, older observations are not current verdicts.",
+      "title": "Evals",
+      "icon": "check-circle",
+      "experimental": true,
+      "description": "Compare recorded YES, NO and UNKNOWN answer percentages for each eval, then inspect the retained evidence.",
+      "views": [
+        {
+          "id": "evals-answer-distribution",
+          "title": "Eval answer distribution",
+          "subject": "Recorded answer percentages for each workflow-scoped eval.",
+          "objective": "Compare the YES, NO and UNKNOWN shares without conflating missing evidence with an unknown answer.",
+          "acceptance": "Show three bars per eval, including zero shares, whose values sum to 100%. Keep workflow identities separate and preserve the evidence ledger.",
+          "description": "Each eval has YES, NO and UNKNOWN bars totaling 100% of its recorded answers. Up to 33 evals are shown, ordered by name; Table view retains all observations. Missing observations are not counted as UNKNOWN.",
+          "data": {
+            "source": "eval-answer-distribution",
+            "order-by": [
+              { "field": "eval-label", "direction": "asc" }
+            ],
+            "limit": 99
+          },
+          "mark": "chart",
+          "chart": "horizontal-bar",
+          "layout": "full",
+          "empty-message": "No eval observations were retained.",
+          "encoding": {
+            "x": { "field": "eval-result", "type": "nominal", "title": "Answer" },
+            "section": { "field": "eval-label", "type": "nominal", "title": "Eval / Repository / Workflow" },
+            "y": { "field": "answer-percent", "type": "quantitative", "title": "Recorded answers", "unit": "percent" },
+            "color": { "field": "eval-result", "type": "nominal", "title": "Answer" }
+          }
+        },
+        {
+          "id": "evals-statuses",
+          "title": "Observed eval answers by workflow",
+          "data": {
+            "source": "eval-status-ledger",
+            "order-by": [
+              { "field": "workflow", "direction": "asc" },
+              { "field": "observed-at", "direction": "desc" }
+            ]
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "lazy-list": true,
+          "layout": "full-view",
+          "empty-message": "No eval observations were retained.",
+          "encoding": {
+            "columns": [
+              { "field": "workflow", "type": "nominal", "title": "Workflow" },
+              { "field": "eval", "type": "nominal", "title": "Eval" },
+              { "field": "repository", "type": "nominal", "title": "Repository" },
+              { "field": "eval-result", "type": "nominal", "title": "Answer" },
+              { "field": "observed-at", "type": "temporal", "title": "Observed", "format": "human-friendly-timestamp" },
+              { "field": "run", "type": "nominal", "title": "Run", "display": "run-link" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "graders",
+      "kind": "custom",
+      "intent": "Compare normalized grader values over time and inspect their native evidence.",
+      "subject": "Run-linked grader results and native metric evidence grouped by workflow.",
+      "objective": "Show each grader value relative to its observed maximum while keeping the native-value ledger available for evidence review.",
+      "acceptance": "Plot time against value divided by the maximum for that grader in the selected data; missing values and zero maxima do not produce points. Preserve grader identity, native values/status, units and times; unknown is not pass/fail. Historical observations are not current verdicts or verified gains.",
+      "title": "Graders",
+      "icon": "checklist",
+      "experimental": true,
+      "description": "Compare grader values over time relative to each grader's observed maximum, then inspect native measurements in the ledger.",
+      "views": [
+        {
+          "id": "graders-value-scatter",
+          "title": "Grader values relative to observed maximum",
+          "subject": "Timed grader observations normalized by each grader's maximum in the selected data.",
+          "objective": "Compare relative measurements and follow a point to its producing run.",
+          "acceptance": "Preserve each point's timestamp and value/max ratio without connecting or clamping values; omit missing ratios and zero maxima. Normalization is not an eval answer or proof of improvement.",
+          "description": "Each point is value / maximum observed value for the same grader and workflow. Zero or missing maxima are not plotted. Ratios are not eval answers or proof of improvement.",
+          "data": { "source": "grader-value-scatter" },
+          "mark": "chart",
+          "chart": "scatter",
+          "scatter": { "cluster": false },
+          "layout": "full",
+          "empty-message": "No timed grader values have a nonzero observed maximum. Native observations remain in the ledger below.",
+          "encoding": {
+            "x": { "field": "observed-at", "type": "temporal", "title": "Observed at", "format": "human-friendly-timestamp" },
+            "y": { "field": "normalized-value", "type": "quantitative", "title": "Value / observed maximum" },
+            "color": { "field": "grader-series", "type": "nominal", "title": "Grader" },
+            "href": { "field": "run-link", "type": "nominal" }
+          }
+        },
+        {
+          "id": "graders-statuses",
+          "title": "Observed grader results by workflow",
+          "data": {
+            "source": "grader-status-ledger",
+            "order-by": [
+              { "field": "workflow", "direction": "asc" },
+              { "field": "observed-at", "direction": "desc" }
+            ]
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "lazy-list": true,
+          "layout": "full-view",
+          "empty-message": "No grader observations were retained.",
+          "encoding": {
+            "columns": [
+              { "field": "workflow", "type": "nominal", "title": "Workflow" },
+              { "field": "grader", "type": "nominal", "title": "Grader" },
+              { "field": "repository", "type": "nominal", "title": "Repository" },
+              { "field": "value", "type": "quantitative", "title": "Value" },
+              { "field": "unit", "type": "nominal", "title": "Unit" },
+              { "field": "status", "type": "nominal", "title": "Status" },
+              { "field": "observed-at", "type": "temporal", "title": "Observed", "format": "human-friendly-timestamp" },
+              { "field": "run", "type": "nominal", "title": "Run", "display": "run-link" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "configuration",
+      "kind": "custom",
+      "intent": "Review checked-in control-repository policy before proposing a configuration change.",
+      "subject": "Entries in the control repository's .github/workflows/cao.json.",
+      "objective": "Understand explicit scope, modes and enablement without inferring broader authority.",
+      "acceptance": "Preserve policy identity and provenance, distinguish missing settings from permission, and fail closed on unavailable policy. Policy edits require explicit reviewed authorization; never expose credentials or silently promote live mode.",
+      "title": "Settings",
+      "navigation-label": "Settings",
+      "icon": "gear",
+      "class-name": "configuration-page",
+      "description": "Review checked-in CAO policy before proposing an authorized configuration change.",
+      "views": [
+        {
+          "id": "configuration-policy",
+          "locked": true,
+          "title": "Policy",
+          "description": "Change policy values, then copy the updated JSON for review and commit.",
+          "data": {
+            "sources": [
+              "configuration-policy"
+            ]
+          },
+          "mark": "element",
+          "element": "configuration-policy",
+          "layout": "full"
+        }
+      ]
+    }
+  ]
+}

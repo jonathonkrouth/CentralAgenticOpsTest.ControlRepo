@@ -1,0 +1,1021 @@
+{
+  "queries": [
+    {
+      "name": "workflow-ordered-runs",
+      "subject": "Order retained run attempts within each workflow by their observed start time.",
+      "objective": "Identify each workflow's latest execution without importing event coverage or outcome totals.",
+      "acceptance": "The first chronological attempt in each workflow partition has no preceding run delta; break timestamp ties by run ID and attempt, and use creation time for queued runs.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "latest-run-at",
+          "function": "coalesce",
+          "args": [{ "field": "started-at" }, { "field": "created-at" }]
+        }
+      ],
+      "window": [
+        {
+          "operation": "change",
+          "field": "run",
+          "as": "preceding-run-delta",
+          "mode": "absolute",
+          "groupby": ["organization", "repository", "workflow"],
+          "order-by": [
+            { "field": "latest-run-at", "direction": "desc" },
+            { "field": "run", "direction": "desc" },
+            { "field": "run-attempt", "direction": "desc" }
+          ]
+        }
+      ],
+      "select": [
+        { "field": "organization" },
+        { "field": "repository" },
+        { "field": "workflow" },
+        { "field": "run" },
+        { "field": "run-attempt" },
+        { "field": "latest-run-at" },
+        { "field": "run-status" },
+        { "field": "run-conclusion" },
+        { "field": "preceding-run-delta" },
+        { "field": "run-link" }
+      ]
+    },
+    {
+      "name": "workflow-latest-runs",
+      "subject": "Project the latest retained run attempt for each workflow.",
+      "objective": "Expose each workflow's latest observed execution state without implying aggregate outcomes.",
+      "acceptance": "Select only the first chronologically ordered attempt per workflow; preserve queued and in-progress states instead of treating unknown conclusions as failures.",
+      "from": "workflow-ordered-runs",
+      "filter": { "predicates": [{ "field": "preceding-run-delta", "equals": "unknown" }] },
+      "compute": [
+        {
+          "as": "observed-conclusion",
+          "function": "coalesce",
+          "args": [{ "field": "run-conclusion" }, { "value": "unknown" }]
+        },
+        {
+          "as": "completed",
+          "function": "equals-any",
+          "args": [{ "field": "run-status" }, { "value": "completed" }]
+        },
+        {
+          "as": "latest-run-status",
+          "function": "if",
+          "args": [{ "field": "completed" }, { "field": "observed-conclusion" }, { "field": "run-status" }]
+        }
+      ],
+      "select": [
+        { "field": "organization" },
+        { "field": "repository" },
+        { "field": "workflow" },
+        { "field": "run" },
+        { "field": "run-attempt" },
+        { "field": "latest-run-at" },
+        { "field": "latest-run-status" },
+        { "field": "run-link" }
+      ]
+    },
+    {
+      "name": "workflow-list-preview",
+      "subject": "Show workflow declarations while latest-run evidence is still loading.",
+      "objective": "Make workflow identities and drill links available before retained runs are evaluated.",
+      "acceptance": "Preserve every declared workflow and its drill link; leave latest-run fields absent until the complete projection arrives.",
+      "from": "workflows",
+      "compute": [
+        { "as": "repository-coordinate", "function": "concat", "args": [{ "field": "organization" }, { "value": "/" }, { "field": "repository" }] },
+        { "as": "workflow-label", "function": "concat", "args": [{ "field": "repository-coordinate" }, { "value": ":" }, { "field": "workflow" }] },
+        { "as": "workflow-display-name", "function": "coalesce", "args": [{ "field": "workflow-name" }, { "field": "workflow" }] },
+        { "as": "declared-role", "function": "coalesce", "args": [{ "field": "workflow-role" }, { "value": "standalone" }] },
+        { "as": "declared-mode", "function": "coalesce", "args": [{ "field": "rollout-mode" }, { "value": "unknown" }] },
+        { "as": "declared-registration", "function": "coalesce", "args": [{ "field": "workflow-active" }, { "value": "unknown" }] },
+        { "as": "encoded-workflow", "function": "url-encode", "args": [{ "field": "workflow-label" }] },
+        { "as": "workflow-dashboard-href", "function": "concat", "args": [{ "value": "#page-workflow-runtime?workflow=" }, { "field": "encoded-workflow" }] },
+        { "as": "workflow-dashboard-link", "function": "dashboard-link", "args": [{ "field": "workflow-link" }, { "field": "workflow-dashboard-href" }, { "field": "workflow-display-name" }, { "field": "workflow-label" }] }
+      ],
+      "select": [
+        { "field": "organization" },
+        { "field": "repository-coordinate", "as": "repository" },
+        { "field": "workflow" },
+        { "field": "workflow-display-name", "as": "workflow-name" },
+        { "field": "workflow-label" },
+        { "field": "campaign-name" },
+        { "field": "declared-role", "as": "workflow-role" },
+        { "field": "declared-mode", "as": "rollout-mode" },
+        { "field": "declared-registration", "as": "workflow-active" },
+        { "field": "repository-link" },
+        { "field": "workflow-dashboard-link", "as": "workflow-link" }
+      ],
+      "order-by": [
+        { "field": "repository", "direction": "asc" },
+        { "field": "workflow", "direction": "asc" }
+      ]
+    },
+    {
+      "name": "workflow-list",
+      "subject": "List declared workflows in latest observed run order.",
+      "objective": "Open a dedicated workflow page from a lightweight inventory with its latest execution status.",
+      "acceptance": "Preserve textual run identities and keep unobserved workflows last with an explicit missing-run state; use only workflow declarations and retained runs, not event coverage or aggregate success/failure counters.",
+      "from": "workflows",
+      "joins": [
+        {
+          "source": "workflow-latest-runs",
+          "type": "left",
+          "on": [
+            { "left": "organization", "right": "organization" },
+            { "left": "repository", "right": "repository" },
+            { "left": "workflow", "right": "workflow" }
+          ],
+          "fields": [
+            { "field": "run", "as": "latest-run" },
+            { "field": "latest-run-at", "as": "latest-run-at" },
+            { "field": "latest-run-status", "as": "observed-run-status" },
+            { "field": "run-link", "as": "run-link" }
+          ]
+        }
+      ],
+      "compute": [
+        { "as": "repository-coordinate", "function": "concat", "args": [{ "field": "organization" }, { "value": "/" }, { "field": "repository" }] },
+        { "as": "workflow-label", "function": "concat", "args": [{ "field": "repository-coordinate" }, { "value": ":" }, { "field": "workflow" }] },
+        { "as": "workflow-display-name", "function": "coalesce", "args": [{ "field": "workflow-name" }, { "field": "workflow" }] },
+        { "as": "declared-role", "function": "coalesce", "args": [{ "field": "workflow-role" }, { "value": "standalone" }] },
+        { "as": "declared-mode", "function": "coalesce", "args": [{ "field": "rollout-mode" }, { "value": "unknown" }] },
+        { "as": "declared-registration", "function": "coalesce", "args": [{ "field": "workflow-active" }, { "value": "unknown" }] },
+        { "as": "observed-run-id", "function": "coalesce", "args": [{ "field": "latest-run" }, { "value": "0" }] },
+        { "as": "has-observed-run", "function": "greater-than", "args": [{ "field": "observed-run-id" }, { "value": 0 }] },
+        { "as": "latest-run-status", "function": "coalesce", "args": [{ "field": "observed-run-status" }, { "value": "No observed run" }] },
+        { "as": "encoded-workflow", "function": "url-encode", "args": [{ "field": "workflow-label" }] },
+        { "as": "workflow-dashboard-href", "function": "concat", "args": [{ "value": "#page-workflow-runtime?workflow=" }, { "field": "encoded-workflow" }] },
+        { "as": "workflow-dashboard-link", "function": "dashboard-link", "args": [{ "field": "workflow-link" }, { "field": "workflow-dashboard-href" }, { "field": "workflow-display-name" }, { "field": "workflow-label" }] }
+      ],
+      "select": [
+        { "field": "organization" },
+        { "field": "repository-coordinate", "as": "repository" },
+        { "field": "workflow" },
+        { "field": "workflow-display-name", "as": "workflow-name" },
+        { "field": "workflow-label" },
+        { "field": "campaign-name" },
+        { "field": "declared-role", "as": "workflow-role" },
+        { "field": "declared-mode", "as": "rollout-mode" },
+        { "field": "declared-registration", "as": "workflow-active" },
+        { "field": "latest-run" },
+        { "field": "latest-run-at" },
+        { "field": "latest-run-status" },
+        { "field": "has-observed-run" },
+        { "field": "repository-link" },
+        { "field": "workflow-dashboard-link", "as": "workflow-link" },
+        { "field": "run-link" }
+      ],
+      "order-by": [
+        { "field": "has-observed-run", "direction": "desc" },
+        { "field": "latest-run-at", "direction": "desc" },
+        { "field": "repository", "direction": "asc" },
+        { "field": "workflow", "direction": "asc" }
+      ]
+    },
+    {
+      "name": "runs-daily-conclusions",
+      "subject": "Aggregate workflow run conclusions by UTC day for the Runs stacked area graph.",
+      "objective": "Expose changes in observed run conclusions by day for investigation.",
+      "acceptance": "Count retained runs by started-at UTC day and recorded conclusion; an empty day or missing conclusion is not evidence of healthy execution or absence of activity.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "day",
+          "function": "date-day",
+          "args": [
+            {
+              "field": "started-at"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "day",
+          "run-conclusion"
+        ],
+        "values": [
+          {
+            "field": "run",
+            "as": "runs",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "entity-events",
+      "subject": "Project all run-owned records for reusable cards and run drill-down.",
+      "objective": "Expose run-owned event identity, status, provenance, timestamp, and available navigation links for inspection.",
+      "acceptance": "Projected event fields and fallback URL trace to the source record; a missing link or event is not proof of no output, and event status alone does not verify downstream impact.",
+      "from": "event-base",
+      "compute": [
+        {
+          "as": "event-url",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "safe-output-url"
+            },
+            {
+              "field": "correlation-id"
+            },
+            {
+              "field": "implementation-pull-request-url"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "organization"
+        },
+        {
+          "field": "repository"
+        },
+        {
+          "field": "workflow"
+        },
+        {
+          "field": "run"
+        },
+        {
+          "field": "run-attempt"
+        },
+        {
+          "field": "event"
+        },
+        {
+          "field": "event-source"
+        },
+        {
+          "field": "event-type"
+        },
+        {
+          "field": "event-summary"
+        },
+        {
+          "field": "event-status"
+        },
+        {
+          "field": "github-entity-type"
+        },
+        {
+          "field": "safe-output-type"
+        },
+        {
+          "field": "event-url"
+        },
+        {
+          "field": "event-timestamp",
+          "as": "observed-at"
+        },
+        {
+          "field": "run-link"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "observed-at",
+          "direction": "desc"
+        },
+        {
+          "field": "event",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "runs-table",
+      "subject": "Show observed workflow runs in a table with execution, repository, workflow, engine, model, and navigation details.",
+      "objective": "Locate observed runs whose recorded status or conclusion needs closer inspection.",
+      "acceptance": "Show recorded run identity, status, conclusion, scope, execution metadata, and source links in newest-first order; absent runs require a freshness and coverage check, and a successful run is not proof of accepted outcomes.",
+      "description": "Observed workflow runs ordered from newest to oldest.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "repository-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "run"
+        },
+        {
+          "field": "run-status"
+        },
+        {
+          "field": "run-conclusion"
+        },
+        {
+          "field": "repository-coordinate"
+        },
+        {
+          "field": "workflow"
+        },
+        {
+          "field": "rollout-mode"
+        },
+        {
+          "field": "engine"
+        },
+        {
+          "field": "engine-version"
+        },
+        {
+          "field": "gh-aw-version"
+        },
+        {
+          "field": "requested-model"
+        },
+        {
+          "field": "resolved-model"
+        },
+        {
+          "field": "started-at"
+        },
+        {
+          "field": "repository-link"
+        },
+        {
+          "field": "workflow-link"
+        },
+        {
+          "field": "run-link"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "started-at",
+          "direction": "desc"
+        }
+      ]
+    },
+    {
+      "name": "workflow-aic-per-run",
+      "subject": "List declared workflows with recorded positive AI Credit costs and their average cost per run.",
+      "objective": "Identify workflows with observed run AIC averages worth investigating alongside run evidence.",
+      "acceptance": "Include only declared workflows with at least one run attempt reporting positive AIC; exclude zero and missing telemetry from the average and ranking, without interpreting missing telemetry as free execution.",
+      "description": "Workflow AI Credit averages limited to run attempts with recorded positive AIC.",
+      "from": "workflows",
+      "joins": [
+        {
+          "source": "workflow-aic-run-totals",
+          "type": "left",
+          "on": [
+            { "left": "organization", "right": "organization" },
+            { "left": "repository", "right": "repository" },
+            { "left": "workflow", "right": "workflow" }
+          ],
+          "fields": [
+            { "field": "runs", "as": "observed-runs" },
+            { "field": "aic-runs", "as": "observed-aic-runs" },
+            { "field": "aic", "as": "observed-aic" }
+          ]
+        }
+      ],
+      "compute": [
+        {
+          "as": "repository-slug",
+          "function": "concat",
+          "args": [{ "field": "organization" }, { "value": "/" }, { "field": "repository" }]
+        },
+        {
+          "as": "workflow-display-name",
+          "function": "coalesce",
+          "args": [{ "field": "workflow-name" }, { "field": "workflow" }]
+        },
+        {
+          "as": "workflow-identity",
+          "function": "concat",
+          "args": [{ "field": "repository-slug" }, { "value": ":" }, { "field": "workflow" }]
+        },
+        {
+          "as": "encoded-workflow",
+          "function": "url-encode",
+          "args": [{ "field": "workflow-identity" }]
+        },
+        {
+          "as": "workflow-dashboard-href",
+          "function": "concat",
+          "args": [{ "value": "#page-workflow-runtime?workflow=" }, { "field": "encoded-workflow" }]
+        },
+        {
+          "as": "workflow-dashboard-label",
+          "function": "concat",
+          "args": [{ "value": "View " }, { "field": "workflow-display-name" }, { "value": " workflow dashboard" }]
+        },
+        {
+          "as": "workflow-dashboard-link",
+          "function": "dashboard-link",
+          "args": [
+            { "field": "workflow-link" },
+            { "field": "workflow-dashboard-href" },
+            { "field": "workflow-dashboard-label" },
+            { "field": "workflow-identity" }
+          ]
+        },
+        {
+          "as": "aic-per-run",
+          "function": "quotient",
+          "args": [{ "field": "observed-aic" }, { "field": "observed-aic-runs" }]
+        }
+      ],
+      "filter": {
+        "predicates": [{ "field": "observed-aic-runs", "gte": 1 }]
+      },
+      "select": [
+        { "field": "workflow-identity", "as": "workflow-label" },
+        { "field": "workflow-dashboard-link", "as": "workflow-link" },
+        { "field": "aic-per-run" }
+      ],
+      "order-by": [{ "field": "aic-per-run", "direction": "desc" }],
+      "limit": 10
+    }
+  ],
+  "views": [
+    {
+      "id": "run-events",
+      "title": "Events",
+      "description": "Observed events for the selected run.",
+      "data": {
+        "source": "entity-events",
+        "arguments": [
+          {
+            "name": "organization",
+            "field": "organization"
+          },
+          {
+            "name": "repository",
+            "field": "repository"
+          },
+          {
+            "name": "workflow",
+            "field": "workflow"
+          },
+          {
+            "name": "run",
+            "field": "run"
+          },
+          {
+            "name": "run-attempt",
+            "field": "run-attempt"
+          }
+        ]
+      },
+      "mark": "list",
+      "list": {
+        "style": "entity-cards",
+        "card": "event",
+        "icon": "pulse",
+        "drill": {
+          "type": "external",
+          "field": "event-url"
+        }
+      },
+      "empty-message": "No events were retained for this run.",
+      "layout": "full",
+      "encoding": {
+        "columns": [
+          {
+            "field": "event-summary",
+            "type": "nominal",
+            "title": "Event"
+          },
+          {
+            "field": "event-type",
+            "type": "nominal",
+            "title": "Type"
+          },
+          {
+            "field": "event-status",
+            "type": "nominal",
+            "title": "Status"
+          },
+          {
+            "field": "event-source",
+            "type": "nominal",
+            "title": "Source"
+          },
+          {
+            "field": "run",
+            "type": "nominal",
+            "title": "Run"
+          },
+          {
+            "field": "observed-at",
+            "type": "temporal",
+            "title": "Observed",
+            "format": "human-friendly-timestamp"
+          },
+          {
+            "field": "event-url",
+            "type": "nominal",
+            "title": "External URL"
+          }
+        ]
+      }
+    }
+  ],
+  "pages": [
+    {
+      "id": "workflows",
+      "kind": "built-in",
+      "intent": "Determine which declared workflow needs CAO operational review.",
+      "subject": "Workflow inventory and retained runs with positive recorded AIC.",
+      "objective": "Find workflows for configuration and execution review.",
+      "acceptance": "Rank average AIC using only runs with positive recorded cost; excluded zero/missing telemetry does not mean free execution. Preserve workflow identity, role and ownership; inventory relationships do not establish dispatches or rollout authority.",
+      "page": "workflows",
+      "title": "Workflows",
+      "icon": "workflow",
+      "description": "Select a declared workflow for CAO operational review.",
+      "definition": {
+        "data-state": {
+          "availability": true
+        },
+        "views": [
+          {
+            "id": "workflows-by-aic-per-run",
+            "title": "Average AIC per run by workflow",
+            "subject": "Compare observed average AI Credit cost per run across workflows.",
+            "objective": "Identify costly workflows for a closer review of their run evidence.",
+            "acceptance": "Rank only workflows with positive recorded AIC, averaging only attempts with positive recorded costs; missing or zero telemetry is not evidence of free execution, waste, or outcome value.",
+            "description": "Declared workflows ranked by average AI Credit cost across runs with positive recorded AIC. Zero and missing telemetry are excluded.",
+            "data": {
+              "source": "workflow-aic-per-run",
+              "order-by": [
+                {
+                  "field": "aic-per-run",
+                  "direction": "desc"
+                }
+              ],
+              "limit": 10
+            },
+            "mark": "chart",
+            "chart": "horizontal-bar",
+            "layout": "full",
+            "empty-message": "No workflow AI Credit cost data is available.",
+            "encoding": {
+              "x": {
+                "field": "workflow-label",
+                "type": "nominal",
+                "format": "workflow-identity-label",
+                "title": "Workflow"
+              },
+              "y": {
+                "field": "aic-per-run",
+                "type": "quantitative",
+                "title": "Average AIC per run",
+                "unit": "aic-per-run"
+              },
+              "href": {
+                "field": "workflow-link",
+                "type": "nominal"
+              }
+            }
+          },
+          {
+            "id": "workflows-inventory",
+            "title": "Workflows",
+            "description": "Declared workflows ordered by their latest retained run. Open a workflow for its runtime details.",
+            "data": {
+              "source": "workflow-list",
+              "partial-source": "workflow-list-preview"
+            },
+            "mark": "table",
+            "prompt": "none",
+            "card-drill": {
+              "type": "external",
+              "field": "workflow-link"
+            },
+            "controls": "interactive",
+            "lazy-list": true,
+            "column-summaries": false,
+            "layout": "full-view",
+            "empty-message": "No workflows observed.",
+            "encoding": {
+              "columns": [
+                {
+                  "field": "workflow-name",
+                  "type": "nominal",
+                  "title": "Workflow"
+                },
+                {
+                  "field": "workflow",
+                  "type": "nominal",
+                  "title": "Workflow file",
+                  "format": "workflow-relative-path"
+                },
+                {
+                  "field": "repository",
+                  "type": "nominal",
+                  "title": "Repository",
+                  "display": "repository-link"
+                },
+                {
+                  "field": "campaign-name",
+                  "type": "nominal",
+                  "title": "Campaign"
+                },
+                {
+                  "field": "workflow-role",
+                  "type": "nominal",
+                  "title": "Role"
+                },
+                {
+                  "field": "rollout-mode",
+                  "type": "nominal",
+                  "title": "Mode",
+                  "display": "mode"
+                },
+                {
+                  "field": "workflow-active",
+                  "type": "nominal",
+                  "title": "State",
+                  "display": "active-state"
+                },
+                {
+                  "field": "latest-run-status",
+                  "type": "nominal",
+                  "title": "Latest run status",
+                  "display": "status"
+                },
+                {
+                  "field": "latest-run-at",
+                  "type": "temporal",
+                  "title": "Latest run",
+                  "format": "human-friendly-timestamp"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "runs",
+      "kind": "built-in",
+      "intent": "Find retained workflow runs and compare activity across the selected horizon.",
+      "subject": "Observed GitHub Actions runs within the active scope and time bounds.",
+      "objective": "Select runs for execution-health investigation.",
+      "acceptance": "Show run/workflow identity, native status versus conclusion, timestamps and source links; preserve scope, time bounds and unavailable/partial states. Runtime success is not verified operational value.",
+      "page": "runs",
+      "title": "Runs",
+      "description": "Select a retained workflow run for CAO execution-health investigation.",
+      "icon": "play",
+      "definition": {
+        "data-state": {
+          "availability": true
+        },
+        "views": [
+          {
+            "id": "runs-last-week",
+            "title": "Runs in the last week",
+            "subject": "See the daily distribution of observed run conclusions in the last seven days.",
+            "objective": "Spot changes in run activity or failures worth investigating.",
+            "acceptance": "Any apparent trend is checked against underlying runs and data completeness.",
+            "description": "Workflow run conclusions observed during the last seven days.",
+            "data": {
+              "source": "runs-daily-conclusions",
+              "time": {
+                "range": "7d"
+              }
+            },
+            "mark": "chart",
+            "chart": "area",
+            "layout": "horizontal",
+            "encoding": {
+              "x": {
+                "field": "day",
+                "type": "temporal",
+                "format": "human-friendly-timestamp",
+                "title": "Started"
+              },
+              "y": {
+                "field": "runs",
+                "type": "quantitative",
+                "title": "Runs"
+              },
+              "color": {
+                "field": "run-conclusion",
+                "type": "nominal"
+              }
+            }
+          },
+          {
+            "id": "runs-runs-source",
+            "title": "Runs",
+            "description": "Observed workflow runs across the configured repository scope.",
+            "data": {
+              "source": "runs-table"
+            },
+            "mark": "table",
+            "controls": "interactive",
+            "lazy-list": true,
+            "column-summaries": true,
+            "layout": "full-view",
+            "empty-message": "No runs observed.",
+            "encoding": {
+              "href": {
+                "field": "run-link",
+                "type": "nominal"
+              },
+              "columns": [
+                {
+                  "field": "run",
+                  "type": "nominal",
+                  "display": "run-link"
+                },
+                {
+                  "field": "run-status",
+                  "type": "nominal",
+                  "display": "status"
+                },
+                {
+                  "field": "run-conclusion",
+                  "type": "nominal",
+                  "display": "status"
+                },
+                {
+                  "field": "repository-coordinate",
+                  "type": "nominal",
+                  "title": "Repository",
+                  "display": "repository-link"
+                },
+                {
+                  "field": "workflow",
+                  "type": "nominal",
+                  "display": "workflow-link"
+                },
+                {
+                  "field": "rollout-mode",
+                  "type": "nominal",
+                  "display": "mode"
+                },
+                {
+                  "field": "engine",
+                  "type": "nominal"
+                },
+                {
+                  "field": "engine-version",
+                  "type": "nominal"
+                },
+                {
+                  "field": "requested-model",
+                  "type": "nominal"
+                },
+                {
+                  "field": "resolved-model",
+                  "type": "nominal"
+                },
+                {
+                  "field": "started-at",
+                  "type": "temporal",
+                  "format": "human-friendly-timestamp"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "issues",
+      "kind": "built-in",
+      "intent": "Compare safe-output issue activity by repository and native issue state.",
+      "subject": "Retained GitHub issues created by agentic workflows.",
+      "objective": "Locate issue evidence and follow-up work.",
+      "acceptance": "Preserve issue/repository identity, native states, timestamps and links; disclose coverage and selected horizon. Counts or closed states do not establish accepted outcomes or causal impact.",
+      "page": "issues",
+      "title": "Issues",
+      "icon": "issue-opened",
+      "description": "Identify retained safe-output issues that require operational follow-up.",
+      "definition": {
+        "data-state": {
+          "availability": true
+        },
+        "views": [
+          {
+            "id": "issues-by-repository",
+            "title": "Top repositories with issues",
+            "subject": "Compare retained issue safe outputs across the ten most represented repositories.",
+            "objective": "Identify repositories with issue activity that needs review.",
+            "acceptance": "The ranking describes retained issues, not all repository problems or their resolution.",
+            "description": "The share of retained issues attributed to the ten repositories with the most issue safe outputs.",
+            "data": {
+              "source": "issue-repository-totals"
+            },
+            "mark": "chart",
+            "chart": "pie",
+            "layout": "full",
+            "empty-message": "No issue safe outputs were retained in the current report.",
+            "encoding": {
+              "x": {
+                "field": "repository-coordinate",
+                "type": "nominal",
+                "title": "Repository"
+              },
+              "y": {
+                "field": "issues",
+                "type": "quantitative",
+                "title": "Issues"
+              }
+            }
+          },
+          {
+            "id": "issues-by-status",
+            "title": "Open and closed issues",
+            "subject": "See the current status distribution of retained issue safe outputs.",
+            "objective": "Find open issues and closing reasons requiring review.",
+            "acceptance": "Status is interpreted from retained issue evidence, without assuming closure means the underlying problem is resolved.",
+            "description": "The current split of retained issue safe outputs by open state or closing reason.",
+            "data": {
+              "source": "issue-safe-outputs"
+            },
+            "mark": "chart",
+            "chart": "pie",
+            "layout": "full",
+            "empty-message": "No issue status data was retained in the current report.",
+            "encoding": {
+              "x": {
+                "field": "issue-status-detail",
+                "type": "nominal",
+                "title": "Current status"
+              },
+              "y": {
+                "field": "entity-url",
+                "type": "quantitative",
+                "aggregate": "count",
+                "title": "Issues"
+              }
+            }
+          },
+          {
+            "id": "issues-source",
+            "title": "Issues",
+            "description": "Retained issue safe outputs with their repository, producing workflow, and workflow run.",
+            "data": {
+              "source": "issue-safe-outputs",
+              "limit": 100,
+              "order-by": [
+                {
+                  "field": "observed-at",
+                  "direction": "desc"
+                }
+              ]
+            },
+            "filter-bar": {
+              "filters": [
+                {
+                  "id": "labels",
+                  "label": "Labels",
+                  "groups": [
+                    {
+                      "label": "Safe output",
+                      "field": "safe-output-type",
+                      "source": "issue-safe-output-label-options",
+                      "value-field": "safe-output-type"
+                    }
+                  ]
+                },
+                {
+                  "id": "status",
+                  "label": "Status",
+                  "groups": [
+                    {
+                      "label": "Status",
+                      "field": "issue-status-detail",
+                      "source": "issue-status-label-options",
+                      "value-field": "issue-status-detail"
+                    }
+                  ]
+                }
+              ]
+            },
+            "mark": "table",
+            "controls": "interactive",
+            "lazy-list": true,
+            "column-summaries": true,
+            "layout": "full-view",
+            "empty-message": "No issue safe outputs were retained in the current report.",
+            "encoding": {
+              "href": {
+                "field": "entity-url",
+                "type": "nominal"
+              },
+              "columns": [
+                {
+                  "field": "event-summary",
+                  "type": "nominal",
+                  "title": "Issue"
+                },
+                {
+                  "field": "issue-status-detail",
+                  "type": "nominal",
+                  "title": "Current status",
+                  "display": "status"
+                },
+                {
+                  "field": "issue-state",
+                  "type": "nominal",
+                  "title": "State"
+                },
+                {
+                  "field": "issue-closing-status",
+                  "type": "nominal",
+                  "title": "Closing status"
+                },
+                {
+                  "field": "issue-closed-at",
+                  "type": "temporal",
+                  "format": "human-friendly-timestamp",
+                  "title": "Closed"
+                },
+                {
+                  "field": "issue-status-observed-at",
+                  "type": "temporal",
+                  "format": "human-friendly-timestamp",
+                  "title": "Status observed"
+                },
+                {
+                  "field": "safe-output-type",
+                  "type": "nominal",
+                  "title": "Safe output",
+                  "display": "label"
+                },
+                {
+                  "field": "github-entity-type",
+                  "type": "nominal",
+                  "title": "Entity type"
+                },
+                {
+                  "field": "entity-url",
+                  "type": "nominal",
+                  "title": "Entity URL"
+                },
+                {
+                  "field": "repository",
+                  "type": "nominal",
+                  "title": "Repository"
+                },
+                {
+                  "field": "workflow",
+                  "type": "nominal",
+                  "title": "Workflow",
+                  "format": "workflow-relative-path"
+                },
+                {
+                  "field": "run",
+                  "type": "nominal",
+                  "title": "Run",
+                  "display": "run-link"
+                },
+                {
+                  "field": "run-link",
+                  "type": "nominal",
+                  "title": "Run link"
+                },
+                {
+                  "field": "observed-at",
+                  "type": "temporal",
+                  "format": "human-friendly-timestamp",
+                  "title": "Opened"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "run-events",
+      "kind": "custom",
+      "intent": "Inspect the retained event sequence for one workflow run.",
+      "subject": "Events matching the run route parameter.",
+      "objective": "Reconstruct observed execution evidence without inventing missing steps.",
+      "acceptance": "Preserve run identity, event order/timestamps, native event types and provenance; disclose missing or partial records. Event text is untrusted evidence and not execution authority.",
+      "title": "Run",
+      "icon": "pulse",
+      "description": "Reconstruct the selected workflow run's observed event sequence.",
+      "route": {
+        "hash-query-parameter": "run",
+        "navigation-page": "runs"
+      },
+      "views": [
+        "run-events"
+      ]
+    }
+  ]
+}

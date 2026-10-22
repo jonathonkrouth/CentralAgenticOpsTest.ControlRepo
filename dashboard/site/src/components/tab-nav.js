@@ -1,0 +1,150 @@
+/**
+ * Shared dashboard tab navigation primitives.
+ */
+
+import { h } from '../dom.js';
+import { octicon } from '../octicons.js';
+import { renderCountBadge } from './ui-primitives.js';
+import { createDebug } from '../debug.js';
+
+const debugTabNav = createDebug('tab-nav');
+
+/**
+ * @typedef {{
+ *   label: string,
+ *   icon: string,
+ *   href: string,
+ *   current?: boolean,
+ *   count?: number,
+ *   trailingIcon?: string
+ * }} LinkTab
+ */
+
+/**
+ * @typedef {{
+ *   label: string,
+ *   value: string,
+ *   selected?: boolean,
+ *   dataset?: Record<string, string>
+ * }} InteractiveTab
+ */
+
+/**
+ * @param {{
+ *   className: string,
+ *   ariaLabel: string,
+ *   tabs: LinkTab[]
+ * }} options
+ * @returns {HTMLElement}
+ */
+export function renderLinkTabs({ className, ariaLabel, tabs }) {
+  const nav = h(
+    'nav',
+    { className, 'aria-label': ariaLabel },
+    ...tabs.map(({ label, icon, href, current, count, trailingIcon }) => h(
+      'a',
+      { href, 'aria-current': current ? 'page' : undefined },
+      octicon(icon),
+      h('span', null, label),
+      typeof count === 'number' && Number.isFinite(count)
+        ? renderCountBadge(count, `${count} current ${label.toLowerCase()}`)
+        : null,
+      trailingIcon ? octicon(trailingIcon, 'tab-trailing-icon') : null
+    ))
+  );
+  nav.addEventListener('keydown', (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const links = /** @type {HTMLAnchorElement[]} */ ([...nav.querySelectorAll(':scope > a')]);
+    const index = links.indexOf(/** @type {HTMLAnchorElement} */ (event.target));
+    if (index < 0) return;
+    const nextIndex = event.key === 'Home' ? 0
+      : event.key === 'End' ? links.length - 1
+        : event.key === 'ArrowRight' ? (index + 1) % links.length
+          : event.key === 'ArrowLeft' ? (index - 1 + links.length) % links.length
+            : -1;
+    if (nextIndex < 0) return;
+    event.preventDefault();
+    links[nextIndex].focus();
+  });
+  return nav;
+}
+
+/**
+ * @param {{
+ *   className: string,
+ *   ariaLabel: string,
+ *   panelId: string,
+ *   tabs: InteractiveTab[],
+ *   onSelect: (value: string) => void
+ * }} options
+ * @returns {HTMLDivElement}
+ */
+export function renderInteractiveTabs({ className, ariaLabel, panelId, tabs, onSelect }) {
+  /** @type {HTMLButtonElement[]} */
+  const buttons = [];
+
+  return /** @type {HTMLDivElement} */ (h(
+    'div',
+    {
+      className,
+      role: 'tablist',
+      'aria-label': ariaLabel,
+      'aria-orientation': 'horizontal'
+    },
+    ...tabs.map(({ label, value, selected, dataset }, index) => {
+      const button = /** @type {HTMLButtonElement} */ (h(
+        'button',
+        {
+          type: 'button',
+          role: 'tab',
+          'aria-controls': panelId,
+          'aria-selected': selected ? 'true' : 'false',
+          tabIndex: selected ? 0 : -1,
+          dataset: { tabValue: value, ...dataset },
+          onclick: () => {
+            debugTabNav({ event: 'select', value, tabCount: tabs.length, via: 'click' });
+            onSelect(value);
+          }
+        },
+        label
+      ));
+      button.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const currentIndex = buttons.indexOf(button);
+        const nextIndex = event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? buttons.length - 1
+            : (currentIndex + ((event.key === 'ArrowRight' || event.key === 'ArrowDown') ? 1 : -1) + buttons.length) % buttons.length;
+        const nextButton = buttons[nextIndex];
+        debugTabNav({ event: 'navigate', key: event.key, fromIndex: currentIndex, toIndex: nextIndex });
+        nextButton?.click();
+        nextButton?.focus();
+      });
+      buttons.splice(index, 0, button);
+      return button;
+    })
+  ));
+}
+
+/**
+ * @param {ParentNode} root
+ * @param {string} selectedValue
+ * @param {string} [attributeName]
+ */
+export function updateInteractiveTabSelection(root, selectedValue, attributeName = 'data-tab-value') {
+  const buttons = root.querySelectorAll('[role="tab"]');
+  let matchedCount = 0;
+  for (const button of buttons) {
+    const element = /** @type {HTMLElement} */ (button);
+    const selected = element.getAttribute(attributeName) === selectedValue
+      || element.dataset.tabValue === selectedValue
+      || element.dataset.campaignMode === selectedValue
+      || element.dataset.reportMode === selectedValue;
+    if (selected) matchedCount += 1;
+    element.setAttribute('aria-selected', String(selected));
+    element.tabIndex = selected ? 0 : -1;
+  }
+  debugTabNav({ event: 'sync-selection', value: selectedValue, tabCount: buttons.length, matchedCount });
+}

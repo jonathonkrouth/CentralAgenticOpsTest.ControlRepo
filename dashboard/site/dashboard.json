@@ -1,0 +1,1242 @@
+{
+  "language-version": "0.1.0",
+  "dashboard": {
+    "id": "central-agentic-ops-dashboard",
+    "title": "Central Agentic Ops Dashboard",
+    "description": "Authoritative declarative dashboard document for built-in and custom pages in the presenter prototype.",
+    "repository": "githubnext/gh-cao",
+    "data-status": {
+      "freshness-source": "dashboard-data-freshness",
+      "health-source": "dashboard-ingestion-health",
+      "stale-after-hours": 24
+    },
+    "callouts": [
+      {
+        "id": "stale-data",
+        "title": "Dashboard data may be stale",
+        "description": "No new workflow activity is present in the ingested data for at least 24 hours. Check ingestion and shard details before relying on these results.",
+        "icon": "alert",
+        "navigation-page": "indexing",
+        "visible-when": {
+          "source": "dashboard-data-freshness",
+          "field": "latest-data-at",
+          "older-than-hours": 24
+        }
+      }
+    ],
+    "card-templates": [
+      {
+        "id": "webhook-status",
+        "icon": "broadcast",
+        "title": { "field": "scope", "title": "Counter scope" },
+        "detail-labels": "visible",
+        "labels": [{ "field": "configuration", "title": "Configuration" }],
+        "details": [
+          { "field": "received", "title": "Received" },
+          { "field": "in-flight", "title": "In flight" },
+          { "field": "verified", "title": "HMAC verified" },
+          { "field": "accepted", "title": "Acknowledged" },
+          { "field": "rejected", "title": "Rejected" },
+          { "field": "failed", "title": "Failed" },
+          { "field": "duplicates", "title": "Duplicates" },
+          { "field": "pings", "title": "Signed pings" }
+        ],
+        "timing": [
+          { "field": "last-received-at", "title": "Last delivery", "type": "temporal", "format": "human-friendly-timestamp", "icon": "clock" },
+          { "field": "last-accepted-at", "title": "Last acknowledgement", "type": "temporal", "format": "human-friendly-timestamp", "icon": "clock" },
+          { "field": "last-failure-at", "title": "Last failure", "type": "temporal", "format": "human-friendly-timestamp", "icon": "clock" },
+          { "field": "last-ping-at", "title": "Last signed ping", "type": "temporal", "format": "human-friendly-timestamp", "icon": "clock" }
+        ]
+      },
+      {
+        "id": "workflow-value-result",
+        "icon": "trophy",
+        "title": { "field": "delta-label", "title": "Observed change" },
+        "subtitle": { "field": "workflow-context", "title": "Workflow" },
+        "status": { "field": "movement", "title": "Compared with goal" },
+        "labels": [],
+        "details": [
+          { "field": "snapshot-name", "title": "Measure" },
+          { "field": "direction-label", "title": "Goal" },
+          { "field": "comparison-label", "title": "Reference" }
+        ],
+        "timing": [{ "field": "observed-at", "type": "temporal", "format": "human-friendly-timestamp", "title": "Evidence captured", "icon": "clock" }]
+      },
+      {
+        "id": "command",
+        "icon": "terminal",
+        "title": { "field": "command-title", "title": "Command" },
+        "subtitle": { "field": "command-target", "title": "Target" },
+        "status": { "field": "status", "title": "Status" },
+        "labels": [],
+        "details": [
+          { "field": "id", "title": "Command ID" },
+          { "field": "error", "title": "Reason" }
+        ],
+        "timing": [
+          { "field": "command-created-at", "title": "Queued", "type": "temporal", "format": "human-friendly-timestamp", "icon": "clock" }
+        ]
+      },
+      {
+        "id": "ingested-shard",
+        "icon": "database",
+        "title": { "field": "shard", "title": "Shard" },
+        "subtitle": { "field": "kind", "title": "Import kind" },
+        "labels": [{ "field": "status", "title": "Import status", "display": "status" }],
+        "details": [
+          { "field": "ingested-at", "title": "Ingested at", "format": "human-friendly-timestamp" },
+          { "field": "committed-records", "title": "Committed records" },
+          { "field": "workflow-runs", "title": "Workflow runs" },
+          { "field": "payload-hash", "title": "Payload hash" }
+        ]
+      },
+      {
+        "id": "repository",
+        "icon": "repo",
+        "title": {
+          "field": "repository",
+          "title": "Repository"
+        },
+        "labels": [],
+        "details": [
+          {
+            "field": "runs",
+            "title": "Runs"
+          }
+        ]
+      },
+      {
+        "id": "workflow",
+        "icon": "workflow",
+        "title": {
+          "field": "workflow-name",
+          "title": "Workflow"
+        },
+        "subtitle": {
+          "field": "workflow",
+          "title": "Workflow file",
+          "format": "workflow-relative-path"
+        },
+        "labels": [
+          {
+            "field": "workflow-role",
+            "title": "Role",
+            "display": "label"
+          },
+          {
+            "field": "workflow-active",
+            "title": "State",
+            "display": "active-state"
+          }
+        ],
+        "details": [
+          {
+            "field": "successful-runs",
+            "title": "Success"
+          },
+          {
+            "field": "failed-runs",
+            "title": "Failures"
+          },
+          {
+            "field": "aic-per-run",
+            "title": "Average AIC",
+            "unit": "aic-per-run"
+          },
+          {
+            "field": "repository",
+            "title": "Repository"
+          },
+          {
+            "field": "campaign-name",
+            "title": "Campaign"
+          },
+          {
+            "field": "observed-at",
+            "title": "Observed",
+            "format": "human-friendly-timestamp"
+          }
+        ]
+      },
+      {
+        "id": "workflow-latest",
+        "icon": "workflow",
+        "status": { "field": "latest-run-status", "title": "Latest run status" },
+        "title": { "field": "workflow-name", "title": "Workflow" },
+        "subtitle": { "field": "workflow", "title": "Workflow file", "format": "workflow-relative-path" },
+        "labels": [
+          { "field": "workflow-role", "title": "Role", "display": "label" },
+          { "field": "workflow-active", "title": "State", "display": "active-state" },
+          { "field": "latest-run-status", "title": "Latest run", "display": "label" }
+        ],
+        "details": [
+          { "field": "repository", "title": "Repository" },
+          { "field": "campaign-name", "title": "Campaign" },
+          { "field": "latest-run-at", "title": "Latest run", "format": "human-friendly-timestamp" }
+        ]
+      },
+      {
+        "id": "run",
+        "icon": "play",
+        "status": {
+          "field": "run-conclusion",
+          "fallback-field": "run-status",
+          "title": "Status"
+        },
+        "title": {
+          "field": "workflow",
+          "title": "Workflow file",
+          "format": "workflow-relative-path"
+        },
+        "subtitle": {
+          "field": "target-repository",
+          "title": "Target repository"
+        },
+        "labels": [
+          {
+            "field": "run-status",
+            "title": "Status",
+            "display": "status"
+          },
+          {
+            "field": "run-conclusion",
+            "title": "Outcome",
+            "display": "status"
+          },
+          {
+            "field": "branch",
+            "title": "Branch",
+            "display": "ref"
+          }
+        ],
+        "details": [
+          {
+            "field": "run-title",
+            "title": "Run"
+          },
+          {
+            "field": "run",
+            "title": "Run",
+            "display": "run-link"
+          },
+          {
+            "field": "event",
+            "title": "Event"
+          },
+          {
+            "field": "repository",
+            "title": "Repository"
+          },
+          {
+            "field": "run-attempt",
+            "title": "Attempt"
+          }
+        ],
+        "timing": [
+          {
+            "field": "started-at",
+            "title": "Started",
+            "icon": "calendar",
+            "type": "temporal",
+            "format": "human-friendly-timestamp"
+          },
+          {
+            "field": "duration",
+            "title": "Duration",
+            "icon": "stopwatch"
+          }
+        ]
+      },
+      {
+        "id": "ingestion-transaction",
+        "icon": "database",
+        "title": {
+          "field": "kind",
+          "title": "Ingestion"
+        },
+        "details": [
+          {
+            "field": "created-at",
+            "title": "Committed at",
+            "format": "human-friendly-timestamp"
+          },
+          {
+            "field": "committed-records",
+            "title": "Committed records"
+          },
+          {
+            "field": "payload-hash",
+            "title": "Payload hash"
+          }
+        ],
+        "labels": []
+      },
+      {
+        "id": "event",
+        "icon": "pulse",
+        "title": {
+          "field": "event-summary",
+          "title": "Event"
+        },
+        "labels": [
+          {
+            "field": "event-type",
+            "title": "Type",
+            "display": "label"
+          },
+          {
+            "field": "event-status",
+            "title": "Status",
+            "display": "status"
+          }
+        ],
+        "details": [
+          {
+            "field": "event-source",
+            "title": "Source"
+          },
+          {
+            "field": "run",
+            "title": "Run"
+          },
+          {
+            "field": "observed-at",
+            "title": "Observed",
+            "format": "human-friendly-timestamp"
+          }
+        ]
+      },
+      {
+        "id": "audit",
+        "icon": "checklist",
+        "drill": {
+          "type": "query",
+          "page": "audit-insights",
+          "query": "audit-entity-insights",
+          "title-field": "event-summary",
+          "arguments": [
+            {
+              "name": "audit",
+              "field": "event-summary"
+            }
+          ]
+        },
+        "title": {
+          "field": "event-summary",
+          "title": "Audit event"
+        },
+        "labels": [
+          {
+            "field": "event-status",
+            "title": "Status",
+            "display": "status"
+          },
+          {
+            "field": "audit-kind",
+            "title": "Audit event",
+            "display": "label"
+          }
+        ],
+        "details": [
+          {
+            "field": "workflow",
+            "title": "Workflow",
+            "format": "workflow-relative-path"
+          },
+          {
+            "field": "repository",
+            "title": "Repository"
+          },
+          {
+            "field": "run",
+            "title": "Run",
+            "display": "run-link"
+          },
+          {
+            "field": "observed-at",
+            "title": "Observed",
+            "format": "human-friendly-timestamp"
+          }
+        ]
+      },
+      {
+        "id": "mcp-tool",
+        "icon": "mcp",
+        "drill": {
+          "type": "query",
+          "page": "tool-insights",
+          "query": "tool-entity-insights",
+          "title-field": "mcp-tool-label",
+          "arguments": [
+            {
+              "name": "tool",
+              "field": "mcp-tool-label"
+            }
+          ]
+        },
+        "title": {
+          "field": "mcp-tool-label",
+          "title": "MCP tool"
+        },
+        "subtitle": {
+          "field": "mcp-server",
+          "title": "MCP server"
+        },
+        "labels": [],
+        "details": [
+          {
+            "field": "calls",
+            "title": "Calls"
+          },
+          {
+            "field": "workflows",
+            "title": "Workflows"
+          }
+        ]
+      },
+      {
+        "id": "firewall-domain",
+        "icon": "globe",
+        "drill": {
+          "type": "query",
+          "page": "domain-insights",
+          "query": "domain-entity-insights",
+          "title-field": "domain",
+          "arguments": [
+            {
+              "name": "domain",
+              "field": "domain"
+            }
+          ]
+        },
+        "title": {
+          "field": "domain",
+          "title": "Domain"
+        },
+        "labels": [],
+        "details": [
+          {
+            "field": "accepted",
+            "title": "Allowed"
+          },
+          {
+            "field": "blocked",
+            "title": "Blocked"
+          },
+          {
+            "field": "run",
+            "title": "Runs"
+          }
+        ]
+      },
+      {
+        "id": "firewall-workflow",
+        "icon": "workflow",
+        "title": {
+          "field": "workflow",
+          "title": "Workflow",
+          "format": "workflow-relative-path"
+        },
+        "subtitle": {
+          "field": "repository",
+          "title": "Repository"
+        },
+        "labels": [],
+        "details": [
+          {
+            "field": "accepted",
+            "title": "Allowed"
+          },
+          {
+            "field": "blocked",
+            "title": "Blocked"
+          },
+          {
+            "field": "runs",
+            "title": "Runs"
+          }
+        ]
+      },
+      {
+        "id": "issue",
+        "icon": "issue-opened",
+        "title": {
+          "field": "event-summary",
+          "title": "Issue"
+        },
+        "labels": [
+          {
+            "field": "safe-output-type",
+            "title": "Safe output",
+            "display": "label"
+          },
+          {
+            "field": "issue-status-detail",
+            "title": "Current status",
+            "display": "status"
+          }
+        ],
+        "details": [
+          {
+            "field": "repository",
+            "title": "Repository"
+          },
+          {
+            "field": "workflow",
+            "title": "Workflow",
+            "format": "workflow-relative-path"
+          },
+          {
+            "field": "run",
+            "title": "Run",
+            "display": "run-link"
+          },
+          {
+            "field": "observed-at",
+            "title": "Opened",
+            "format": "human-friendly-timestamp"
+          }
+        ]
+      },
+      {
+        "id": "pull-request",
+        "icon": "git-pull-request",
+        "title": {
+          "field": "event-summary",
+          "title": "Pull request"
+        },
+        "labels": [
+          {
+            "field": "safe-output-type",
+            "title": "Safe output",
+            "display": "label"
+          }
+        ],
+        "details": [
+          {
+            "field": "repository",
+            "title": "Repository"
+          },
+          {
+            "field": "workflow",
+            "title": "Workflow",
+            "format": "workflow-relative-path"
+          },
+          {
+            "field": "run",
+            "title": "Run",
+            "display": "run-link"
+          },
+          {
+            "field": "observed-at",
+            "title": "Opened",
+            "format": "human-friendly-timestamp"
+          }
+        ]
+      },
+      {
+        "id": "operation",
+        "icon": "workflow",
+        "icon-field": "operation-icon",
+        "title": {
+          "field": "operation-name",
+          "title": "Operation"
+        },
+        "subtitle": {
+          "field": "operation-description",
+          "title": "Description"
+        },
+        "labels": [
+          {
+            "field": "operation-kind",
+            "title": "Kind",
+            "display": "label"
+          },
+          {
+            "field": "workflow-states",
+            "title": "Workflow state",
+            "display": "label"
+          }
+        ],
+        "details": [
+          {
+            "field": "owner",
+            "title": "Owner"
+          },
+          {
+            "field": "workflow-count",
+            "title": "Workflows"
+          },
+          {
+            "field": "workflow-roles",
+            "title": "Roles"
+          }
+        ]
+      },
+      {
+        "id": "marketplace-package-summary",
+        "icon": "archive",
+        "icon-field": "package-icon",
+        "title": {
+          "field": "package-name",
+          "title": "Package"
+        },
+        "subtitle": {
+          "field": "package-description",
+          "title": "Description"
+        },
+        "labels": [
+          {
+            "field": "registry-name",
+            "title": "Registry",
+            "display": "label"
+          }
+        ],
+        "detail-labels": "visible",
+        "details": [
+          {
+            "field": "publisher",
+            "title": "By"
+          }
+        ]
+      },
+      {
+        "id": "marketplace-package",
+        "icon": "archive",
+        "icon-field": "package-icon",
+        "title": {
+          "field": "package-name",
+          "title": "Package"
+        },
+        "subtitle": {
+          "field": "package-description",
+          "title": "Description"
+        },
+        "labels": [
+          {
+            "field": "registry-name",
+            "title": "Registry",
+            "display": "label"
+          },
+          {
+            "field": "package-version",
+            "title": "Version",
+            "display": "ref"
+          }
+        ],
+        "detail-labels": "visible",
+        "details": [
+          {
+            "field": "publisher",
+            "title": "By"
+          },
+          {
+            "field": "stars",
+            "title": "Stars"
+          },
+          {
+            "field": "forks",
+            "title": "Forks"
+          }
+        ],
+        "actions": [
+          {
+            "action": "add-marketplace-package",
+            "context": ["package-source"]
+          }
+        ]
+      },
+      {
+        "id": "attention-signal",
+        "icon": "issue-opened",
+        "icon-field": "icon",
+        "status": {
+          "field": "tone"
+        },
+        "title": {
+          "field": "title",
+          "title": "Signal"
+        },
+        "subtitle": {
+          "field": "reason",
+          "title": "Reason"
+        },
+        "labels": [
+          {
+            "field": "kind",
+            "title": "Kind",
+            "display": "label"
+          }
+        ],
+        "details": [
+          {
+            "field": "scope",
+            "title": "Scope"
+          },
+          {
+            "field": "action",
+            "title": "Next step"
+          },
+          {
+            "field": "observed-at",
+            "title": "Observed",
+            "type": "temporal",
+            "format": "human-friendly-timestamp"
+          }
+        ]
+      },
+      {
+        "id": "campaign",
+        "icon": "goal",
+        "title": {
+          "field": "campaign-name",
+          "title": "Campaign"
+        },
+        "labels": [
+          {
+            "field": "modes",
+            "title": "Modes",
+            "display": "label"
+          }
+        ],
+        "details": [
+          {
+            "field": "dispatches",
+            "title": "# dispatches"
+          },
+          {
+            "field": "aic",
+            "title": "# aic",
+            "unit": "aic"
+          }
+        ],
+        "actions": [
+          {
+            "action": "disable-campaign",
+            "context": [
+              "campaign"
+            ],
+            "when": {
+              "field": "registration",
+              "equals": "true"
+            }
+          },
+          {
+            "action": "enable-campaign",
+            "context": [
+              "campaign"
+            ],
+            "when": {
+              "field": "registration",
+              "equals": "false"
+            }
+          }
+        ]
+      },
+      {
+        "id": "problem",
+        "icon": "alert",
+        "status": {
+          "field": "problem-kind",
+          "title": "State"
+        },
+        "title": {
+          "field": "problem-title",
+          "title": "Problem"
+        },
+        "subtitle": {
+          "field": "target-repository",
+          "title": "Target repository"
+        },
+        "labels": [
+          {
+            "field": "rollout-mode",
+            "title": "Mode",
+            "display": "mode"
+          },
+          {
+            "field": "workflow-name",
+            "title": "Workflow"
+          }
+        ],
+        "timing": [
+          {
+            "field": "started-at",
+            "title": "Observed",
+            "type": "temporal",
+            "format": "human-friendly-timestamp",
+            "icon": "clock"
+          }
+        ],
+        "details": [
+          {
+            "field": "occurrence-count",
+            "title": "Occurrences"
+          },
+          {
+            "field": "runtime-repository",
+            "title": "Runtime repository"
+          },
+          {
+            "field": "failure-count",
+            "title": "Failures"
+          },
+          {
+            "field": "run",
+            "title": "Run",
+            "display": "run-link"
+          }
+        ]
+      },
+      {
+        "id": "maintenance-campaign",
+        "icon": "workflow",
+        "title": {
+          "field": "campaign-name",
+          "title": "Package"
+        },
+        "detail-labels": "visible",
+        "details": [
+          {
+            "field": "campaign-version",
+            "title": "Installed"
+          },
+          {
+            "field": "campaign-current-version",
+            "title": "Latest"
+          },
+          {
+            "field": "campaign-update-state",
+            "title": "Update confidence",
+            "display": "status"
+          }
+        ],
+        "actions": [
+          {
+            "action": "disable-campaign",
+            "context": [
+              "campaign"
+            ],
+            "when": {
+              "field": "campaign-registration",
+              "equals": "true"
+            }
+          },
+          {
+            "action": "update-campaign",
+            "context": [
+              "campaign"
+            ],
+            "when": {
+              "field": "campaign-update-state",
+              "equals": "update-available"
+            }
+          },
+          {
+            "action": "enable-campaign",
+            "context": [
+              "campaign"
+            ],
+            "when": {
+              "field": "campaign-registration",
+              "equals": "false"
+            }
+          }
+        ],
+        "labels": [
+          {
+            "field": "campaign-registration",
+            "title": "Registration",
+            "display": "active-state"
+          }
+        ]
+      },
+      {
+        "id": "maintenance-repository",
+        "icon": "repo",
+        "drill": {
+          "type": "external",
+          "field": "repository-url"
+        },
+        "title": {
+          "field": "repository",
+          "title": "Repository"
+        },
+        "detail-labels": "visible",
+        "details": [
+          {
+            "field": "gh-aw-version",
+            "title": "Installed"
+          },
+          {
+            "field": "gh-aw-current-version",
+            "title": "Latest"
+          }
+        ],
+        "actions": [
+          {
+            "action": "upgrade-target-repository",
+            "when": {
+              "field": "upgrade-action-visible",
+              "equals": true
+            },
+            "context": [
+              "repository"
+            ]
+          }
+        ],
+        "labels": [
+          {
+            "field": "upgrade-state",
+            "title": "Upgrade",
+            "display": "status"
+          }
+        ]
+      }
+    ],
+    "cli-actions": [
+      {
+        "id": "update-repository",
+        "level": "operate",
+        "label": "Update all",
+        "description": "Queue an individual update for every listed campaign, then open Commands.",
+        "icon": "sync",
+        "command": "gh aw update https://github.com/githubnext/gh-cao/{{campaign}} --repo {{cao-repository}} --pr-message 'This pull request was requested through [Central Agentic Ops (CAO)]({{cao-repository-url}}) to update the {{campaign}} campaign from its upstream source, keeping installed workflows current with published fixes and improvements. Return to the [CAO dashboard]({{cao-url}}#page-maintenance-campaigns).'",
+        "preview-command": "gh aw update https://github.com/githubnext/gh-cao/{{campaign}} --repo {{cao-repository}}",
+        "placement": "view",
+        "arguments": [
+          {
+            "id": "create-pull-request",
+            "label": "Create pull request",
+            "description": "Create a pull request with the workflow campaign updates.",
+            "type": "boolean",
+            "flag": "--create-pull-request",
+            "default": true
+          },
+          {
+            "id": "auto-merge",
+            "label": "Auto merge",
+            "description": "Enable auto-merge on the created pull request. Requires Create pull request.",
+            "type": "boolean",
+            "flag": "--auto-merge",
+            "default": false
+          }
+        ]
+      },
+      {
+        "id": "upgrade-repository",
+        "level": "operate",
+        "label": "Upgrade all",
+        "description": "Queue an individual Agentic Workflows upgrade for every listed repository, then open Commands.",
+        "icon": "download",
+        "command": "gh aw upgrade --repo {{repository}} --pr-message 'This pull request was requested through [Central Agentic Ops (CAO)]({{cao-repository-url}}) to upgrade GitHub Agentic Workflows in {{repository}}, refreshing workflow tooling, action versions, and generated lock files. Return to the [CAO dashboard]({{cao-url}}#page-maintenance).'",
+        "preview-command": "gh aw upgrade --repo {{repository}}",
+        "placement": "view",
+        "arguments": [
+          {
+            "id": "create-pull-request",
+            "label": "Create pull request",
+            "description": "Create a pull request with the generated workflow upgrades.",
+            "type": "boolean",
+            "flag": "--create-pull-request",
+            "default": true
+          },
+          {
+            "id": "pre-releases",
+            "label": "Include pre-releases",
+            "description": "Allow upgrades to pre-release versions of GitHub Agentic Workflows.",
+            "type": "boolean",
+            "flag": "--pre-releases",
+            "default": false
+          },
+          {
+            "id": "auto-merge",
+            "label": "Auto merge",
+            "description": "Enable auto-merge on the created pull request. Requires Create pull request.",
+            "type": "boolean",
+            "flag": "--auto-merge",
+            "default": false
+          }
+        ]
+      },
+      {
+        "id": "upgrade-target-repository",
+        "level": "operate",
+        "label": "Upgrade",
+        "description": "Upgrade Agentic Workflows in the selected repository and create a pull request.",
+        "icon": "download",
+        "command": "gh aw upgrade --repo {{repository}} --pr-message 'This pull request was requested through [Central Agentic Ops (CAO)]({{cao-repository-url}}) to upgrade GitHub Agentic Workflows in {{repository}}, refreshing workflow tooling, action versions, and generated lock files. Return to the [CAO dashboard]({{cao-url}}#page-maintenance).'",
+        "placement": "row",
+        "arguments": [
+          {
+            "id": "create-pull-request",
+            "label": "Create pull request",
+            "description": "Create a pull request with the generated workflow upgrades.",
+            "type": "boolean",
+            "flag": "--create-pull-request",
+            "default": true
+          },
+          {
+            "id": "pre-releases",
+            "label": "Include pre-releases",
+            "description": "Allow upgrades to pre-release versions of GitHub Agentic Workflows.",
+            "type": "boolean",
+            "flag": "--pre-releases",
+            "default": false
+          },
+          {
+            "id": "auto-merge",
+            "label": "Auto merge",
+            "description": "Enable auto-merge on the created pull request. Requires Create pull request.",
+            "type": "boolean",
+            "flag": "--auto-merge",
+            "default": false
+          }
+        ]
+      },
+      {
+        "id": "update-campaign",
+        "level": "operate",
+        "label": "Update",
+        "description": "Update this campaign's agentic workflow.",
+        "icon": "sync",
+        "command": "gh aw update https://github.com/githubnext/gh-cao/{{campaign}} --repo {{cao-repository}} --pr-message 'This pull request was requested through [Central Agentic Ops (CAO)]({{cao-repository-url}}) to update the {{campaign}} campaign from its upstream source, keeping installed workflows current with published fixes and improvements. Return to the [CAO dashboard]({{cao-url}}#page-maintenance-campaigns).'",
+        "placement": "row",
+        "arguments": [
+          {
+            "id": "create-pull-request",
+            "label": "Create pull request",
+            "description": "Create a pull request with the workflow campaign updates.",
+            "type": "boolean",
+            "flag": "--create-pull-request",
+            "default": false
+          },
+          {
+            "id": "auto-merge",
+            "label": "Auto merge",
+            "description": "Enable auto-merge on the created pull request. Requires Create pull request.",
+            "type": "boolean",
+            "flag": "--auto-merge",
+            "default": false
+          }
+        ]
+      },
+      {
+        "id": "set-campaign-live",
+        "level": "operate",
+        "label": "Switch to live",
+        "description": "Switch this campaign's workflows to live mode.",
+        "icon": "play",
+        "command": "gh cao campaigns mode live {{campaign}}",
+        "placement": "row"
+      },
+      {
+        "id": "set-campaign-preview",
+        "level": "operate",
+        "label": "Switch to preview",
+        "description": "Switch this campaign's workflows to preview mode.",
+        "icon": "eye",
+        "command": "gh cao campaigns mode preview {{campaign}}",
+        "placement": "row"
+      },
+      {
+        "id": "enable-campaign",
+        "level": "operate",
+        "label": "Activate campaign",
+        "description": "Activate this campaign's orchestrator and worker workflows.",
+        "icon": "play",
+        "command": "gh cao campaigns enable {{campaign}}",
+        "placement": "row"
+      },
+      {
+        "id": "disable-campaign",
+        "level": "operate",
+        "label": "Deactivate",
+        "description": "Deactivate future campaign workflow runs. Active runs continue until separately cancelled on GitHub.",
+        "icon": "pause",
+        "command": "gh cao campaigns disable {{campaign}}",
+        "placement": "row"
+      },
+      {
+        "id": "create-agent-task",
+        "level": "propose",
+        "label": "Start agent task",
+        "description": "Start a GitHub Copilot coding agent task from the reviewed prompt.",
+        "icon": "copilot",
+        "command": "gh agent-task create --from-file -",
+        "placement": "row"
+      },
+      {
+        "id": "add-marketplace-package",
+        "level": "operate",
+        "label": "Add",
+        "description": "Copy the canonical CAO add command for this package. The dashboard does not install packages.",
+        "icon": "plus",
+        "command": "gh cao campaigns add {{package-source}}",
+        "placement": "row",
+        "copy-only": true
+      },
+      {
+        "id": "add-repository",
+        "level": "operate",
+        "label": "Add repository",
+        "description": "Stage one exact repository in local CAO policy in review mode. Review and commit the policy change before activation; credential access is configured separately.",
+        "icon": "plus",
+        "command": "gh cao repos add {{repository}}",
+        "placement": "view",
+        "selector": {
+          "label": "Repository",
+          "placeholder": "Search owner/repository",
+          "debounce-ms": 300,
+          "query": {
+            "command": "gh search repos",
+            "fields": ["fullName", "description"],
+            "limit": 20
+          },
+          "mapping": {
+            "value": "fullName",
+            "label": "fullName",
+            "description": "description",
+            "target": "repository"
+          }
+        }
+      }
+    ],
+    "horizon": {
+      "label": "Horizon",
+      "tooltip": {
+        "label": "Horizon details",
+        "description": "Dashboard data is included from the start time up to, but not including, the end time.",
+        "icon": "question"
+      }
+    },
+    "units": {
+      "aic": {
+        "name": "AICc($)",
+        "symbol": "cAIC",
+        "significant": 2,
+        "format": "aicc"
+      },
+      "aic-per-run": {
+        "name": "AICc($)",
+        "symbol": "cAIC/run",
+        "significant": 2,
+        "format": "aicc"
+      },
+      "usd": {
+        "name": "US dollars",
+        "symbol": "USD",
+        "significant": 0.001,
+        "format": "number"
+      },
+      "ops-grader": {
+        "name": "Operational grader",
+        "symbol": "grader",
+        "significant": 0.01,
+        "format": "number"
+      },
+      "percent": {
+        "name": "Percent",
+        "symbol": "%",
+        "significant": 0.1
+      },
+      "seconds": {
+        "name": "Seconds",
+        "symbol": "s",
+        "significant": 1
+      },
+      "human-duration": {
+        "name": "Human-friendly duration",
+        "symbol": "s",
+        "significant": 1,
+        "format": "duration"
+      },
+      "minutes": {
+        "name": "Minutes",
+        "symbol": "min",
+        "significant": 0.1
+      },
+      "requests-per-minute": {
+        "name": "Requests per minute",
+        "symbol": "req/min",
+        "significant": 0.001
+      }
+    },
+    "navigation": [
+      {
+        "pages": [
+          "overview"
+        ]
+      },
+      {
+        "label": "Data",
+        "pages": [
+          "repositories",
+          "workflows",
+          "campaigns",
+          "runs",
+          "issues",
+          "cost",
+          "value",
+          "friction",
+          "engines-models",
+          "firewall",
+          "mcps",
+          "memory"
+        ]
+      },
+      {
+        "label": "Experimental",
+        "experimental": true,
+        "pages": [
+          "model-routing",
+          "skills",
+          "steering",
+          "simulators"
+        ]
+      },
+      {
+        "label": "Evolution",
+        "pages": [
+          "experiments",
+          "evals",
+          "graders"
+        ]
+      },
+      {
+        "label": "Maintenance",
+        "placement": "bottom",
+        "pages": [
+          "maintenance",
+          "governance",
+          "commands",
+          "marketplace",
+          "indexing",
+          "configuration"
+        ]
+      }
+    ]
+  },
+  "fragments": [
+    "dashboard-fragments/commands.json",
+    "dashboard-fragments/governance.json",
+    "dashboard-fragments/shared-events.json",
+    "dashboard-fragments/shared-inventory.json",
+    "dashboard-fragments/shared-campaigns.json",
+    "dashboard-fragments/controls.json",
+    "dashboard-fragments/repositories.json",
+    "dashboard-fragments/workflow-runs.json",
+    "dashboard-fragments/workflow-value.json",
+    "dashboard-fragments/campaigns.json",
+    "dashboard-fragments/campaign-runtime.json",
+    "dashboard-fragments/campaign-problems.json",
+    "dashboard-fragments/campaign-insights.json",
+    "dashboard-fragments/inventory.json",
+    "dashboard-fragments/operations.json",
+    "dashboard-fragments/model-routing.json",
+    "dashboard-fragments/simulators.json",
+    "dashboard-fragments/overview.json",
+    "dashboard-fragments/overview-attention.json",
+    "dashboard-fragments/entities.json"
+  ]
+}

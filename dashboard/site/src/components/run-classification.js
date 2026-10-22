@@ -1,0 +1,67 @@
+/**
+ * Shared run-conclusion and campaign AI Credit utilization classification,
+ * driven by JSON configuration so status rules stay data-driven rather than
+ * duplicated as hardcoded literals across the overview and campaigns views.
+ */
+
+import { createDebug } from '../debug.js';
+import runConclusionClassification from './run-conclusion-classification.json' with { type: 'json' };
+import campaignAicUtilizationThresholds from './campaign-aic-utilization-thresholds.json' with { type: 'json' };
+
+const debugRunClassification = createDebug('run-classification');
+
+const FAILURE_CONCLUSIONS = new Set(runConclusionClassification.failure ?? []);
+const APPROVAL_CONCLUSIONS = new Set(runConclusionClassification.approval ?? []);
+
+/**
+ * @param {unknown} conclusion
+ * @returns {boolean}
+ */
+export function isFailureConclusion(conclusion) {
+  const result = FAILURE_CONCLUSIONS.has(String(conclusion));
+  if (result) debugRunClassification({ event: 'conclusion-classified', kind: 'failure' });
+  return result;
+}
+
+/**
+ * @param {unknown} conclusion
+ * @returns {boolean}
+ */
+export function isApprovalConclusion(conclusion) {
+  const result = APPROVAL_CONCLUSIONS.has(String(conclusion));
+  if (result) debugRunClassification({ event: 'conclusion-classified', kind: 'approval' });
+  return result;
+}
+
+/**
+ * Classifies an AI Credit utilization ratio (used / allowance) into a status
+ * using the ascending `max` thresholds in campaign-aic-utilization-thresholds.json.
+ * The first rule whose `max` the ratio is below wins; a rule without `max`
+ * acts as the fallback for anything above the highest threshold.
+ * @param {number} ratio
+ * @returns {string}
+ */
+export function classifyUtilizationRatio(ratio) {
+  const status = resolveUtilizationStatus(ratio);
+  debugRunClassification({ event: 'utilization-classified', status });
+  return status;
+}
+
+/**
+ * @param {number} ratio
+ * @returns {string}
+ */
+function resolveUtilizationStatus(ratio) {
+  for (const rule of campaignAicUtilizationThresholds) {
+    if (typeof rule.max !== 'number' || ratio < rule.max) {
+      return rule.status;
+    }
+  }
+  const lastRule = campaignAicUtilizationThresholds[campaignAicUtilizationThresholds.length - 1];
+  if (!lastRule) {
+    throw new Error('campaign-aic-utilization-thresholds.json must define at least one rule.');
+  }
+  // Reachable only if every rule (including the last) declares a numeric `max`, which is a
+  // misconfiguration: the last rule is expected to be an unbounded fallback with no `max`.
+  return lastRule.status;
+}

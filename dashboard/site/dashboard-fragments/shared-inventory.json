@@ -1,0 +1,1836 @@
+{
+  "queries": [
+    {
+      "name": "issue-safe-outputs",
+      "subject": "List retained GitHub issue safe outputs.",
+      "objective": "Inspect retained issue safe outputs and their observed closure state before deciding which items need follow-up.",
+      "acceptance": "Include only safe_output.result issue records, not pull requests; preserve issue and run links, timestamps, state, and status detail. Unknown or unobserved closure state must not be presented as closed.",
+      "description": "Issue-only projection of retained safe-output items.",
+      "from": "issues",
+      "filter": {
+        "predicates": [
+          {
+            "field": "event-type",
+            "equals": "safe_output.result"
+          },
+          {
+            "field": "is-pull-request",
+            "equals": false
+          }
+        ]
+      },
+      "joins": [
+        {
+          "source": "runs",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            },
+            {
+              "left": "workflow",
+              "right": "workflow"
+            },
+            {
+              "left": "run",
+              "right": "run"
+            },
+            {
+              "left": "run-attempt",
+              "right": "run-attempt"
+            }
+          ],
+          "fields": [
+            {
+              "field": "run-link",
+              "as": "linked-run"
+            }
+          ]
+        }
+      ],
+      "compute": [
+        {
+          "as": "_issue-state-open",
+          "function": "equals-any",
+          "args": [
+            {
+              "field": "issue-state"
+            },
+            {
+              "value": "OPEN"
+            }
+          ]
+        },
+        {
+          "as": "_issue-state-closed",
+          "function": "equals-any",
+          "args": [
+            {
+              "field": "issue-state"
+            },
+            {
+              "value": "CLOSED"
+            }
+          ]
+        },
+        {
+          "as": "_issue-open-status",
+          "function": "if",
+          "args": [
+            {
+              "field": "_issue-state-open"
+            },
+            {
+              "value": "Open"
+            },
+            {
+              "value": "Unknown"
+            }
+          ]
+        },
+        {
+          "as": "issue-status",
+          "function": "if",
+          "args": [
+            {
+              "field": "_issue-state-closed"
+            },
+            {
+              "value": "Closed"
+            },
+            {
+              "field": "_issue-open-status"
+            }
+          ]
+        },
+        {
+          "as": "_issue-closing-reason",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "issue-state-reason"
+            },
+            {
+              "value": "unknown"
+            }
+          ]
+        },
+        {
+          "as": "_issue-closing-reason-normalized",
+          "function": "lower",
+          "args": [
+            {
+              "field": "_issue-closing-reason"
+            }
+          ]
+        },
+        {
+          "as": "issue-closing-status",
+          "function": "title-case",
+          "args": [
+            {
+              "field": "_issue-closing-reason-normalized"
+            }
+          ]
+        },
+        {
+          "as": "_issue-closed-status-detail",
+          "function": "concat",
+          "args": [
+            {
+              "value": "Closed: "
+            },
+            {
+              "field": "issue-closing-status"
+            }
+          ]
+        },
+        {
+          "as": "issue-status-detail",
+          "function": "if",
+          "args": [
+            {
+              "field": "_issue-state-closed"
+            },
+            {
+              "field": "_issue-closed-status-detail"
+            },
+            {
+              "field": "issue-status"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "event-timestamp",
+          "as": "observed-at"
+        },
+        {
+          "field": "github-entity-type"
+        },
+        {
+          "field": "is-pull-request"
+        },
+        {
+          "field": "safe-output-type"
+        },
+        {
+          "field": "issue-state"
+        },
+        {
+          "field": "issue-closed"
+        },
+        {
+          "field": "issue-state-reason"
+        },
+        {
+          "field": "issue-status"
+        },
+        {
+          "field": "issue-closing-status"
+        },
+        {
+          "field": "issue-status-detail"
+        },
+        {
+          "field": "issue-closed-at"
+        },
+        {
+          "field": "issue-status-observed-at"
+        },
+        {
+          "field": "event-summary"
+        },
+        {
+          "field": "correlation-id",
+          "as": "entity-url"
+        },
+        {
+          "field": "organization"
+        },
+        {
+          "field": "repository"
+        },
+        {
+          "field": "workflow"
+        },
+        {
+          "field": "run"
+        },
+        {
+          "field": "linked-run",
+          "as": "run-link"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "observed-at",
+          "direction": "desc"
+        },
+        {
+          "field": "entity-url",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "issue-safe-output-label-options",
+      "subject": "List observed safe-output badges for the issue list Labels filter.",
+      "objective": "Choose retained safe-output types without scanning or filtering presented cards.",
+      "acceptance": "Return distinct observed badge values in ascending order; missing evidence is not an empty label inventory.",
+      "from": "issue-safe-outputs",
+      "aggregate": {
+        "by": ["safe-output-type"],
+        "values": [{ "field": "entity-url", "as": "items", "reducer": "count" }]
+      },
+      "order-by": [{ "field": "safe-output-type", "direction": "asc" }]
+    },
+    {
+      "name": "issue-status-label-options",
+      "subject": "List observed status badges for the issue list Status filter.",
+      "objective": "Choose retained issue states and closing reasons without inferring resolution.",
+      "acceptance": "Return distinct observed status details in ascending order; Unknown remains distinct from Open and Closed.",
+      "from": "issue-safe-outputs",
+      "aggregate": {
+        "by": ["issue-status-detail"],
+        "values": [{ "field": "entity-url", "as": "items", "reducer": "count" }]
+      },
+      "order-by": [{ "field": "issue-status-detail", "direction": "asc" }]
+    },
+    {
+      "name": "issue-repository-totals",
+      "subject": "Rank the ten repositories with the most retained GitHub issue safe outputs.",
+      "objective": "Locate repositories with the largest observed issue-safe-output volume for a bounded review of linked records.",
+      "acceptance": "Return at most ten repository coordinates ordered by retained issue-record count; ties or missing issue evidence must not imply a complete fleet ranking or unique issue count.",
+      "description": "Top repositories by retained issue safe-output count.",
+      "from": "issue-safe-outputs",
+      "compute": [
+        {
+          "as": "repository-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "repository-coordinate"
+        ],
+        "values": [
+          {
+            "field": "entity-url",
+            "as": "issues",
+            "reducer": "count"
+          }
+        ]
+      },
+      "order-by": [
+        {
+          "field": "issues",
+          "direction": "desc"
+        },
+        {
+          "field": "repository-coordinate",
+          "direction": "asc"
+        }
+      ],
+      "limit": 10
+    },
+    {
+      "name": "campaign-import-audit-count",
+      "subject": "Count retained audit identities for campaign inventory source quality.",
+      "objective": "Retain audit provenance without reconstructing run coverage.",
+      "acceptance": "Count canonical audit IDs; missing evidence stays unavailable and the count is not displayed as import coverage.",
+      "from": "audits",
+      "aggregate": { "values": [{ "field": "id", "as": "records", "reducer": "count" }] }
+    },
+    {
+      "name": "campaign-import-domain-count",
+      "subject": "Count retained domain identities for campaign inventory source quality.",
+      "objective": "Retain domain provenance without reconstructing run coverage.",
+      "acceptance": "Count canonical domain IDs; missing evidence stays unavailable and the count is not displayed as import coverage.",
+      "from": "domains",
+      "aggregate": { "values": [{ "field": "id", "as": "records", "reducer": "count" }] }
+    },
+    {
+      "name": "campaign-import-tool-count",
+      "subject": "Count retained tool identities for campaign inventory source quality.",
+      "objective": "Retain tool provenance without reconstructing run coverage.",
+      "acceptance": "Count canonical tool IDs; missing evidence stays unavailable and the count is not displayed as import coverage.",
+      "from": "tools",
+      "aggregate": { "values": [{ "field": "id", "as": "records", "reducer": "count" }] }
+    },
+    {
+      "name": "campaign-import-issue-count",
+      "subject": "Count retained issue identities for campaign inventory source quality.",
+      "objective": "Retain issue provenance without reconstructing run coverage.",
+      "acceptance": "Count canonical issue IDs; missing evidence stays unavailable and the count is not displayed as import coverage.",
+      "from": "issues",
+      "aggregate": { "values": [{ "field": "id", "as": "records", "reducer": "count" }] }
+    },
+    {
+      "name": "campaign-workflow-import-evidence",
+      "subject": "Compose retained import-source quality for campaign workflow execution totals.",
+      "objective": "Preserve all four import dependencies without counting unused per-run or per-workflow coverage.",
+      "acceptance": "Compose audit, domain, tool, and issue availability, freshness, and completeness exactly as event-runs. The retained-record count carries source quality only; it is not displayed or used as horizon-specific import coverage, executions, or outcomes. Run and AI Credit totals retain their selected horizon.",
+      "from": "campaign-import-audit-count",
+      "union": ["campaign-import-domain-count", "campaign-import-tool-count", "campaign-import-issue-count"],
+      "time": { "range": "all" },
+      "compute": [
+        { "as": "import-scope", "function": "literal", "args": [{ "value": "retained" }] }
+      ],
+      "aggregate": {
+        "by": ["import-scope"],
+        "values": [
+          { "field": "records", "as": "events", "reducer": "sum" }
+        ]
+      }
+    },
+    {
+      "name": "campaign-workflow-execution-base",
+      "subject": "Summarize retained run attempts and AI Credits before campaign workflow enrichment.",
+      "objective": "Read run identity and recorded AI Credits together instead of enriching every run with import status.",
+      "acceptance": "Count distinct run-attempt identities and sum aic-total per organization, repository, and workflow; missing retained evidence is not proof of no execution or cost.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "import-scope",
+          "function": "literal",
+          "args": [{ "value": "retained" }]
+        },
+        {
+          "as": "run-attempt-identity",
+          "function": "concat",
+          "args": [{ "field": "run" }, { "value": ":" }, { "field": "run-attempt" }]
+        },
+        {
+          "as": "positive-aic",
+          "function": "greater-than",
+          "args": [{ "field": "aic-total" }, { "value": 0 }]
+        }
+      ],
+      "aggregate": {
+        "by": ["organization", "repository", "workflow", "import-scope"],
+        "values": [
+          { "field": "run-attempt-identity", "as": "runs", "reducer": "distinct-count" },
+          { "field": "aic-total", "as": "aic", "reducer": "sum", "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] } }
+        ]
+      }
+    },
+    {
+      "name": "campaign-workflow-execution-totals",
+      "subject": "Attach retained import-evidence quality to compact workflow execution totals.",
+      "objective": "Preserve the public inventory's run and import availability composition after aggregating run evidence.",
+      "acceptance": "Keep runs and AI Credits unchanged; unavailable run evidence fails closed and optional import evidence degrades quality exactly as in run-import-status.",
+      "description": "Only source quality is consumed from import evidence. Join its compact retained-source summary after run aggregation; do not build unused run-level import coverage or change horizon-specific execution totals.",
+      "from": "campaign-workflow-execution-base",
+      "joins": [
+        {
+          "source": "campaign-workflow-import-evidence",
+          "type": "left",
+          "on": [
+            { "left": "import-scope", "right": "import-scope" }
+          ],
+          "fields": [{ "field": "events", "as": "imported-events" }]
+        }
+      ],
+      "select": [
+        { "field": "organization" },
+        { "field": "repository" },
+        { "field": "workflow" },
+        { "field": "runs" },
+        { "field": "aic" }
+      ]
+    },
+    {
+      "name": "campaign-workflow-declarations",
+      "subject": "Project reusable campaign workflow declarations without execution evidence.",
+      "objective": "Share declaration display fields between structural topology and execution inventory without joining runs or import evidence.",
+      "acceptance": "Preserve raw organization, repository, workflow and declaration fields for joins. Select orchestrator and worker roles once, retaining inactive and unknown declarations; only list consumers select active entries. Display defaults and repository links do not establish execution, enrollment or authority.",
+      "from": "workflows",
+      "filter": {
+        "predicates": [
+          { "field": "workflow-role", "in": ["orchestrator", "worker"] }
+        ]
+      },
+      "compute": [
+        {
+          "as": "repository-slug",
+          "function": "concat",
+          "args": [{ "field": "organization" }, { "value": "/" }, { "field": "repository" }]
+        },
+        {
+          "as": "declared-mode",
+          "function": "coalesce",
+          "args": [{ "field": "rollout-mode" }, { "value": "unknown" }]
+        },
+        {
+          "as": "declared-registration",
+          "function": "coalesce",
+          "args": [{ "field": "workflow-active" }, { "value": "unknown" }]
+        },
+        {
+          "as": "campaign-title",
+          "function": "title-case",
+          "args": [{ "field": "campaign" }]
+        },
+        {
+          "as": "campaign-display-name",
+          "function": "coalesce",
+          "args": [{ "field": "campaign-name" }, { "field": "campaign-title" }, { "value": "Repository-owned" }]
+        },
+        {
+          "as": "workflow-display-name",
+          "function": "coalesce",
+          "args": [{ "field": "workflow-name" }, { "field": "workflow" }]
+        },
+        {
+          "as": "encoded-repository",
+          "function": "url-encode",
+          "args": [{ "field": "repository-slug" }]
+        },
+        {
+          "as": "repository-dashboard-href",
+          "function": "concat",
+          "args": [{ "value": "#page-repository-detail?repository=" }, { "field": "encoded-repository" }]
+        },
+        {
+          "as": "repository-dashboard-label",
+          "function": "concat",
+          "args": [{ "value": "View " }, { "field": "repository-slug" }, { "value": " repository dashboard" }]
+        },
+        {
+          "as": "repository-dashboard-link",
+          "function": "dashboard-link",
+          "args": [
+            { "field": "repository-link" }, { "field": "repository-dashboard-href" },
+            { "field": "repository-dashboard-label" }, { "field": "repository-slug" }
+          ]
+        }
+      ],
+      "select": [
+        { "field": "organization" },
+        { "field": "repository" },
+        { "field": "workflow" },
+        { "field": "campaign" },
+        { "field": "campaign-name" },
+        { "field": "workflow-name" },
+        { "field": "workflow-role" },
+        { "field": "rollout-mode" },
+        { "field": "workflow-active" },
+        { "field": "repository-link" },
+        { "field": "workflow-link" },
+        { "field": "repository-slug" },
+        { "field": "declared-mode" },
+        { "field": "declared-registration" },
+        { "field": "campaign-display-name" },
+        { "field": "workflow-display-name" },
+        { "field": "repository-dashboard-link" }
+      ]
+    },
+    {
+      "name": "campaign-workflow-inventory",
+      "subject": "Project declared campaign workflows with lean execution and configuration evidence.",
+      "objective": "Provide campaign totals and lists from shared declarations with separate execution and import-quality evidence.",
+      "acceptance": "Keep all declared orchestrators and workers, including inactive and unobserved entries; preserve inventory ordering, configuration defaults, execution totals, and import-evidence quality.",
+      "description": "Lean campaign inventory with execution totals that retain the public workflow inventory's evidence-quality dependencies.",
+      "from": "campaign-workflow-declarations",
+      "joins": [
+        {
+          "source": "campaign-workflow-execution-totals",
+          "type": "left",
+          "on": [
+            { "left": "organization", "right": "organization" },
+            { "left": "repository", "right": "repository" },
+            { "left": "workflow", "right": "workflow" }
+          ],
+          "fields": [
+            { "field": "runs", "as": "observed-runs" },
+            { "field": "aic", "as": "observed-aic" }
+          ]
+        }
+      ],
+      "compute": [
+        {
+          "as": "total-runs",
+          "function": "coalesce",
+          "args": [{ "field": "observed-runs" }, { "value": 0 }]
+        },
+        {
+          "as": "total-aic",
+          "function": "coalesce",
+          "args": [{ "field": "observed-aic" }, { "value": 0 }]
+        }
+      ],
+      "select": [
+        { "field": "campaign" },
+        { "field": "campaign-name" },
+        { "field": "organization" },
+        { "field": "repository-slug", "as": "repository" },
+        { "field": "workflow" },
+        { "field": "workflow-name" },
+        { "field": "workflow-role" },
+        { "field": "declared-mode", "as": "rollout-mode" },
+        { "field": "declared-registration", "as": "workflow-active" },
+        { "field": "total-runs", "as": "runs" },
+        { "field": "total-aic", "as": "aic" },
+        { "field": "repository-link" },
+        { "field": "workflow-link" },
+        { "field": "campaign-display-name" },
+        { "field": "workflow-display-name" },
+        { "field": "repository-dashboard-link" }
+      ],
+      "order-by": [
+        { "field": "repository", "direction": "asc" },
+        { "field": "workflow", "direction": "asc" }
+      ]
+    },
+    {
+      "name": "workflow-inventory",
+      "subject": "List declared workflows with their campaign, repository, configuration, and observed execution totals.",
+      "objective": "Compare declared workflow configuration with retained run, import-coverage, and AI Credit evidence to select a workflow for closer inspection.",
+      "acceptance": "Keep one row per declared workflow with identity, role, mode, registration, links, observed totals, and ingestion indicator; zero joined totals and missing evidence must not be treated as proof of no execution or complete ingestion.",
+      "description": "Central campaign and repository-owned workflow inventory with observed execution totals.",
+      "from": "workflows",
+      "joins": [
+        {
+          "source": "workflow-run-totals",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            },
+            {
+              "left": "workflow",
+              "right": "workflow"
+            }
+          ],
+          "fields": [
+            {
+              "field": "runs",
+              "as": "observed-runs"
+            },
+            {
+              "field": "successful-runs",
+              "as": "observed-successful-runs"
+            },
+            {
+              "field": "failed-runs",
+              "as": "observed-failed-runs"
+            },
+            {
+              "field": "imported-runs",
+              "as": "observed-imported-runs"
+            }
+          ]
+        },
+        {
+          "source": "workflow-aic-totals",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            },
+            {
+              "left": "workflow",
+              "right": "workflow"
+            }
+          ],
+          "fields": [
+            {
+              "field": "aic",
+              "as": "observed-aic"
+            },
+            {
+              "field": "aic-runs",
+              "as": "observed-aic-runs"
+            }
+          ]
+        }
+      ],
+      "compute": [
+        {
+          "as": "campaign-title",
+          "function": "title-case",
+          "args": [
+            {
+              "field": "campaign"
+            }
+          ]
+        },
+        {
+          "as": "campaign-display-name",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "campaign-name"
+            },
+            {
+              "field": "campaign-title"
+            },
+            {
+              "value": "Repository-owned"
+            }
+          ]
+        },
+        {
+          "as": "repository-slug",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            }
+          ]
+        },
+        {
+          "as": "workflow-display-name",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "workflow-name"
+            },
+            {
+              "field": "workflow"
+            }
+          ]
+        },
+        {
+          "as": "declared-role",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "workflow-role"
+            },
+            {
+              "value": "standalone"
+            }
+          ]
+        },
+        {
+          "as": "declared-mode",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "rollout-mode"
+            },
+            {
+              "value": "unknown"
+            }
+          ]
+        },
+        {
+          "as": "declared-registration",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "workflow-active"
+            },
+            {
+              "value": "unknown"
+            }
+          ]
+        },
+        {
+          "as": "total-runs",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "total-successful-runs",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-successful-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "has-observed-runs",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "total-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "total-failed-runs",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-failed-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "total-aic",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-aic"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "aic-per-run",
+          "function": "quotient",
+          "args": [
+            {
+              "field": "total-aic"
+            },
+            {
+              "field": "observed-aic-runs"
+            }
+          ]
+        },
+        {
+          "as": "total-imported-runs",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-imported-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "ingestion-rate",
+          "function": "quotient",
+          "args": [
+            {
+              "field": "total-imported-runs"
+            },
+            {
+              "field": "total-runs"
+            }
+          ]
+        },
+        {
+          "as": "ingestion",
+          "function": "format-percent",
+          "args": [
+            {
+              "field": "ingestion-rate"
+            }
+          ]
+        },
+        {
+          "as": "encoded-campaign",
+          "function": "url-encode",
+          "args": [
+            {
+              "field": "campaign"
+            }
+          ]
+        },
+        {
+          "as": "campaign-dashboard-href",
+          "function": "concat",
+          "args": [
+            {
+              "value": "#page-campaign-insights?campaign="
+            },
+            {
+              "field": "encoded-campaign"
+            }
+          ]
+        },
+        {
+          "as": "campaign-dashboard-label",
+          "function": "concat",
+          "args": [
+            {
+              "value": "View "
+            },
+            {
+              "field": "campaign-display-name"
+            },
+            {
+              "value": " campaign dashboard"
+            }
+          ]
+        },
+        {
+          "as": "campaign-dashboard-link",
+          "function": "dashboard-link",
+          "args": [
+            {
+              "field": "repository-link"
+            },
+            {
+              "field": "campaign-dashboard-href"
+            },
+            {
+              "field": "campaign-dashboard-label"
+            },
+            {
+              "field": "campaign"
+            }
+          ]
+        },
+        {
+          "as": "encoded-repository",
+          "function": "url-encode",
+          "args": [
+            {
+              "field": "repository-slug"
+            }
+          ]
+        },
+        {
+          "as": "repository-dashboard-href",
+          "function": "concat",
+          "args": [
+            {
+              "value": "#page-repository-detail?repository="
+            },
+            {
+              "field": "encoded-repository"
+            }
+          ]
+        },
+        {
+          "as": "repository-dashboard-label",
+          "function": "concat",
+          "args": [
+            {
+              "value": "View "
+            },
+            {
+              "field": "repository-slug"
+            },
+            {
+              "value": " repository dashboard"
+            }
+          ]
+        },
+        {
+          "as": "repository-dashboard-link",
+          "function": "dashboard-link",
+          "args": [
+            {
+              "field": "repository-link"
+            },
+            {
+              "field": "repository-dashboard-href"
+            },
+            {
+              "field": "repository-dashboard-label"
+            },
+            {
+              "field": "repository-slug"
+            }
+          ]
+        },
+        {
+          "as": "workflow-identity",
+          "function": "concat",
+          "args": [
+            {
+              "field": "repository-slug"
+            },
+            {
+              "value": ":"
+            },
+            {
+              "field": "workflow"
+            }
+          ]
+        },
+        {
+          "as": "encoded-workflow",
+          "function": "url-encode",
+          "args": [
+            {
+              "field": "workflow-identity"
+            }
+          ]
+        },
+        {
+          "as": "workflow-dashboard-href",
+          "function": "concat",
+          "args": [
+            {
+              "value": "#page-workflow-runtime?workflow="
+            },
+            {
+              "field": "encoded-workflow"
+            }
+          ]
+        },
+        {
+          "as": "workflow-dashboard-label",
+          "function": "concat",
+          "args": [
+            {
+              "value": "View "
+            },
+            {
+              "field": "workflow-display-name"
+            },
+            {
+              "value": " workflow dashboard"
+            }
+          ]
+        },
+        {
+          "as": "workflow-dashboard-link",
+          "function": "dashboard-link",
+          "args": [
+            {
+              "field": "workflow-link"
+            },
+            {
+              "field": "workflow-dashboard-href"
+            },
+            {
+              "field": "workflow-dashboard-label"
+            },
+            {
+              "field": "workflow-identity"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "campaign"
+        },
+        {
+          "field": "campaign-display-name",
+          "as": "campaign-name"
+        },
+        {
+          "field": "organization"
+        },
+        {
+          "field": "repository-slug",
+          "as": "repository"
+        },
+        {
+          "field": "workflow"
+        },
+        {
+          "field": "workflow-display-name",
+          "as": "workflow-name"
+        },
+        {
+          "field": "workflow-identity",
+          "as": "workflow-label"
+        },
+        {
+          "field": "declared-role",
+          "as": "workflow-role"
+        },
+        {
+          "field": "declared-mode",
+          "as": "rollout-mode"
+        },
+        {
+          "field": "declared-registration",
+          "as": "workflow-active"
+        },
+        {
+          "field": "total-aic",
+          "as": "aic"
+        },
+        {
+          "field": "total-runs",
+          "as": "runs"
+        },
+        {
+          "field": "total-successful-runs",
+          "as": "successful-runs"
+        },
+        {
+          "field": "total-failed-runs",
+          "as": "failed-runs"
+        },
+        {
+          "field": "aic-per-run"
+        },
+        {
+          "field": "has-observed-runs"
+        },
+        {
+          "field": "ingestion"
+        },
+        {
+          "field": "campaign-dashboard-link",
+          "as": "campaign-link"
+        },
+        {
+          "field": "repository-dashboard-link",
+          "as": "repository-link"
+        },
+        {
+          "field": "workflow-dashboard-link",
+          "as": "workflow-link"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "repository",
+          "direction": "asc"
+        },
+        {
+          "field": "workflow",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "repository-run-statistics",
+      "subject": "Reduce run counts, conclusions, and positive AI Credits before repository enrichment.",
+      "objective": "Share one row-local run aggregate between repository execution and cost summaries.",
+      "acceptance": "Keep organization/repository grain, distinct run IDs, existing failure and approval counts, and positive recorded AIC. Reduce before joins; missing evidence is not zero activity or free execution.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "positive-aic",
+          "function": "greater-than",
+          "args": [{ "field": "aic-total" }, { "value": 0 }]
+        }
+      ],
+      "aggregate": {
+        "by": ["organization", "repository"],
+        "values": [
+          { "field": "run", "as": "runs", "reducer": "distinct-count" },
+          {
+            "field": "run-conclusion", "as": "failed", "reducer": "count",
+            "filter": { "predicates": [{ "field": "run-conclusion", "in": ["failure", "startup-failure", "timed-out"] }] }
+          },
+          {
+            "field": "run-conclusion", "as": "action-required", "reducer": "count",
+            "filter": { "predicates": [{ "field": "run-conclusion", "equals": "action-required" }] }
+          },
+          {
+            "field": "run", "as": "aic-runs", "reducer": "count",
+            "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] }
+          },
+          {
+            "field": "aic-total", "as": "aic", "reducer": "sum",
+            "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] }
+          }
+        ]
+      }
+    },
+    {
+      "name": "repository-aic-totals",
+      "subject": "Summarize observed AI Credit usage by repository.",
+      "objective": "Provide repository-level retained AI Credit totals for comparing observed usage with run activity.",
+      "acceptance": "Sum only positive recorded aic-total by organization and repository; exclude zero and missing costs rather than treating them as free execution.",
+      "description": "Observed AI Credit totals for each repository.",
+      "from": "repository-run-statistics",
+      "filter": { "predicates": [{ "field": "aic-runs", "gte": 1 }] },
+      "select": [
+        { "field": "organization" }, { "field": "repository" }, { "field": "aic" }
+      ]
+    },
+    {
+      "name": "maintenance-repository-versions",
+      "subject": "Group installed and current gh-aw compiler versions and upgrade evidence by repository.",
+      "objective": "Identify repositories with declared Markdown workflows whose retained compiler-version evidence warrants upgrade review.",
+      "acceptance": "Group Markdown workflow declarations by repository coordinate and return distinct recorded installed/current version lists plus upgrade-required and unknown flags; inspect absent or mixed version evidence rather than inferring a repository-wide installed version.",
+      "from": "workflows",
+      "filter": {
+        "predicates": [
+          {
+            "field": "workflow",
+            "includes": ".md"
+          }
+        ]
+      },
+      "compute": [
+        {
+          "as": "repository-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            }
+          ]
+        },
+        {
+          "as": "update-available",
+          "function": "equals-any",
+          "args": [
+            {
+              "field": "gh-aw-update-state"
+            },
+            {
+              "value": "update-available"
+            }
+          ]
+        },
+        {
+          "as": "upgrade-state-unknown",
+          "function": "equals-any",
+          "args": [
+            {
+              "field": "gh-aw-update-state"
+            },
+            {
+              "value": "unknown"
+            }
+          ]
+        },
+        {
+          "as": "upgrade-state-unknown-value",
+          "function": "if",
+          "args": [
+            {
+              "field": "upgrade-state-unknown"
+            },
+            {
+              "value": 1
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "upgrade-required-value",
+          "function": "if",
+          "args": [
+            {
+              "field": "update-available"
+            },
+            {
+              "value": 1
+            },
+            {
+              "value": 0
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "repository-coordinate"
+        ],
+        "values": [
+          {
+            "field": "gh-aw-version",
+            "as": "gh-aw-version",
+            "reducer": "distinct-list"
+          },
+          {
+            "field": "gh-aw-current-version",
+            "as": "gh-aw-current-version",
+            "reducer": "distinct-list"
+          },
+          {
+            "field": "upgrade-required-value",
+            "as": "upgrade-required",
+            "reducer": "max"
+          },
+          {
+            "field": "upgrade-state-unknown-value",
+            "as": "upgrade-state-unknown",
+            "reducer": "max"
+          }
+        ]
+      }
+    },
+    {
+      "name": "maintenance-repositories",
+      "subject": "List each repository with recorded compiler versions and computed upgrade state.",
+      "objective": "Expose recorded compiler versions and computed upgrade state per repository, with its GitHub home URL for inspection.",
+      "acceptance": "Return repository, repository-url, version lists, upgrade-required, upgrade-state, and upgrade-action-visible. Show Upgrade for outdated or unknown evidence; hide it for known-current repositories. Visibility grants no rollout authority.",
+      "from": "maintenance-repository-versions",
+      "compute": [
+        {
+          "as": "repository-url",
+          "function": "concat",
+          "args": [
+            { "value": "https://github.com/" },
+            { "field": "repository-coordinate" }
+          ]
+        },
+        {
+          "as": "should-upgrade",
+          "function": "equals-any",
+          "args": [
+            {
+              "field": "upgrade-required"
+            },
+            {
+              "value": 1
+            }
+          ]
+        },
+        {
+          "as": "installed-version-unavailable",
+          "function": "equals-any",
+          "args": [
+            { "field": "gh-aw-version" },
+            { "value": "" },
+            { "value": "unknown" }
+          ]
+        },
+        {
+          "as": "compiler-versions-match",
+          "function": "equals-any",
+          "args": [
+            { "field": "gh-aw-version" },
+            { "field": "gh-aw-current-version" }
+          ]
+        },
+        {
+          "as": "known-current-versions",
+          "function": "if",
+          "args": [
+            { "field": "installed-version-unavailable" },
+            { "value": false },
+            { "field": "compiler-versions-match" }
+          ]
+        },
+        {
+          "as": "upgrade-status-unavailable",
+          "function": "if",
+          "args": [
+            { "field": "known-current-versions" },
+            { "value": false },
+            { "value": true }
+          ]
+        },
+        {
+          "as": "current-or-unavailable",
+          "function": "if",
+          "args": [
+            {
+              "field": "upgrade-status-unavailable"
+            },
+            {
+              "value": "Upgrade status unavailable"
+            },
+            {
+              "value": "Current"
+            }
+          ]
+        },
+        {
+          "as": "upgrade-action-visible",
+          "function": "if",
+          "args": [
+            { "field": "should-upgrade" },
+            { "value": true },
+            { "field": "upgrade-status-unavailable" }
+          ]
+        },
+        {
+          "as": "upgrade-state",
+          "function": "if",
+          "args": [
+            {
+              "field": "should-upgrade"
+            },
+            {
+              "value": "Upgrade recommended"
+            },
+            {
+              "field": "current-or-unavailable"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "repository-coordinate",
+          "as": "repository"
+        },
+        {
+          "field": "repository-url"
+        },
+        {
+          "field": "gh-aw-version"
+        },
+        {
+          "field": "gh-aw-current-version"
+        },
+        {
+          "field": "upgrade-required"
+        },
+        {
+          "field": "upgrade-action-visible"
+        },
+        {
+          "field": "upgrade-state"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "repository",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "maintenance-campaign-updates",
+      "subject": "Expose at most one CAO package update row for the Updates navigation indicator.",
+      "objective": "Determine whether retained campaign metadata contains an update-available signal for the Updates indicator.",
+      "acceptance": "Return zero or one campaign-update-state row only when it equals update-available; an empty result means no matching retained signal, not that every campaign is current.",
+      "from": "campaigns",
+      "filter": {
+        "predicates": [
+          {
+            "field": "campaign-update-state",
+            "equals": "update-available"
+          }
+        ]
+      },
+      "select": [
+        {
+          "field": "campaign-update-state"
+        }
+      ],
+      "limit": 1
+    },
+    {
+      "name": "maintenance-repository-upgrades",
+      "subject": "Expose at most one gh-aw compiler upgrade row for the Updates navigation indicator.",
+      "objective": "Determine whether repository compiler metadata contains an upgrade-required signal for the Updates indicator.",
+      "acceptance": "Return zero or one upgrade-required row only when the retained value is 1; no row does not establish that all repositories are current when version data is missing.",
+      "from": "maintenance-repositories",
+      "filter": {
+        "predicates": [
+          {
+            "field": "upgrade-required",
+            "equals": 1
+          }
+        ]
+      },
+      "select": [
+        {
+          "field": "upgrade-required"
+        }
+      ],
+      "limit": 1
+    }
+  ],
+  "views": [
+    {
+      "id": "entity-repositories",
+      "title": "Repositories",
+      "description": "Select a repository to inspect its declared workflows.",
+      "data": {
+        "source": "repository-activity"
+      },
+      "mark": "list",
+      "list": {
+        "style": "entity-cards",
+        "card": "repository",
+        "icon": "repo",
+        "drill": {
+          "type": "query",
+          "page": "repository-workflows",
+          "query": "entity-workflows",
+          "title-field": "repository",
+          "arguments": [
+            {
+              "name": "organization",
+              "field": "organization"
+            },
+            {
+              "name": "repository",
+              "field": "repository-name"
+            }
+          ]
+        }
+      },
+      "empty-message": "No repositories discovered.",
+      "layout": "full-view",
+      "encoding": {
+        "columns": [
+          {
+            "field": "repository",
+            "type": "nominal",
+            "title": "Repository"
+          },
+          {
+            "field": "runs",
+            "type": "quantitative",
+            "title": "Runs"
+          }
+        ]
+      }
+    },
+    {
+      "id": "entity-workflows",
+      "title": "Workflows",
+      "description": "Select a workflow to inspect its observed runs.",
+      "data": {
+        "source": "entity-workflows"
+      },
+      "mark": "list",
+      "list": {
+        "style": "entity-cards",
+        "card": "workflow",
+        "icon": "workflow",
+        "drill": {
+          "type": "query",
+          "page": "workflow-run-cards",
+          "query": "entity-runs",
+          "title-field": "workflow",
+          "arguments": [
+            {
+              "name": "organization",
+              "field": "organization"
+            },
+            {
+              "name": "repository",
+              "field": "repository"
+            },
+            {
+              "name": "workflow",
+              "field": "workflow"
+            }
+          ]
+        }
+      },
+      "empty-message": "No workflows observed.",
+      "layout": "full-view",
+      "encoding": {
+        "columns": [
+          {
+            "field": "workflow",
+            "type": "nominal",
+            "title": "Workflow",
+            "format": "workflow-relative-path"
+          },
+          {
+            "field": "workflow-role",
+            "type": "nominal",
+            "title": "Role"
+          },
+          {
+            "field": "workflow-active",
+            "type": "nominal",
+            "title": "State"
+          },
+          {
+            "field": "repository",
+            "type": "nominal",
+            "title": "Repository"
+          },
+          {
+            "field": "campaign-name",
+            "type": "nominal",
+            "title": "Campaign"
+          },
+          {
+            "field": "observed-at",
+            "type": "temporal",
+            "title": "Observed",
+            "format": "human-friendly-timestamp"
+          },
+          {
+            "field": "organization",
+            "type": "nominal",
+            "title": "Organization"
+          }
+        ]
+      }
+    },
+    {
+      "id": "entity-runs",
+      "title": "Runs",
+      "description": "Select a run to inspect its events.",
+      "prompt": "none",
+      "data": {
+        "source": "entity-runs"
+      },
+      "mark": "list",
+      "list": {
+        "style": "entity-cards",
+        "card": "run",
+        "icon": "play",
+        "drill": {
+          "type": "query",
+          "page": "run-events",
+          "query": "entity-events",
+          "title-field": "run",
+          "arguments": [
+            {
+              "name": "organization",
+              "field": "organization"
+            },
+            {
+              "name": "repository",
+              "field": "repository"
+            },
+            {
+              "name": "workflow",
+              "field": "workflow"
+            },
+            {
+              "name": "run",
+              "field": "run"
+            },
+            {
+              "name": "run-attempt",
+              "field": "run-attempt"
+            }
+          ]
+        }
+      },
+      "empty-message": "No runs observed.",
+      "layout": "full-view",
+      "encoding": {
+        "columns": [
+          {
+            "field": "run-title",
+            "type": "nominal",
+            "title": "Run"
+          },
+          {
+            "field": "run",
+            "type": "nominal",
+            "title": "Run number"
+          },
+          {
+            "field": "run-status",
+            "type": "nominal",
+            "title": "Status"
+          },
+          {
+            "field": "run-conclusion",
+            "type": "nominal",
+            "title": "Conclusion"
+          },
+          {
+            "field": "event",
+            "type": "nominal",
+            "title": "Event"
+          },
+          {
+            "field": "branch",
+            "type": "nominal",
+            "title": "Branch",
+            "display": "ref"
+          },
+          {
+            "field": "repository",
+            "type": "nominal",
+            "title": "Repository"
+          },
+          {
+            "field": "workflow",
+            "type": "nominal",
+            "title": "Workflow",
+            "format": "workflow-relative-path"
+          },
+          {
+            "field": "run-attempt",
+            "type": "quantitative",
+            "title": "Attempt"
+          },
+          {
+            "field": "started-at",
+            "type": "temporal",
+            "title": "Started",
+            "format": "human-friendly-timestamp"
+          },
+          {
+            "field": "duration",
+            "type": "nominal",
+            "title": "Duration"
+          },
+          {
+            "field": "organization",
+            "type": "nominal",
+            "title": "Organization"
+          }
+        ]
+      }
+    },
+    {
+      "id": "entity-events",
+      "title": "Events",
+      "description": "Observed events with type-specific links when an external entity is available.",
+      "data": {
+        "source": "entity-events"
+      },
+      "mark": "list",
+      "list": {
+        "style": "entity-cards",
+        "card": "event",
+        "icon": "pulse",
+        "drill": {
+          "type": "external",
+          "field": "event-url"
+        }
+      },
+      "empty-message": "No workflow events were observed in the current run window.",
+      "layout": "full-view",
+      "encoding": {
+        "columns": [
+          {
+            "field": "event-summary",
+            "type": "nominal",
+            "title": "Event"
+          },
+          {
+            "field": "event-type",
+            "type": "nominal",
+            "title": "Type"
+          },
+          {
+            "field": "event-status",
+            "type": "nominal",
+            "title": "Status"
+          },
+          {
+            "field": "event-source",
+            "type": "nominal",
+            "title": "Source"
+          },
+          {
+            "field": "run",
+            "type": "nominal",
+            "title": "Run"
+          },
+          {
+            "field": "observed-at",
+            "type": "temporal",
+            "title": "Observed",
+            "format": "human-friendly-timestamp"
+          },
+          {
+            "field": "event-url",
+            "type": "nominal",
+            "title": "External URL"
+          }
+        ]
+      }
+    },
+    {
+      "id": "issues",
+      "title": "Issues",
+      "description": "Open an issue or its producing workflow run from retained safe-output item evidence.",
+      "data": {
+        "source": "issue-safe-outputs",
+        "limit": 100,
+        "order-by": [
+          {
+            "field": "observed-at",
+            "direction": "desc"
+          }
+        ]
+      },
+      "filter-bar": {
+        "filters": [
+          {
+            "id": "labels",
+            "label": "Labels",
+            "groups": [
+              {
+                "label": "Safe output",
+                "field": "safe-output-type",
+                "source": "issue-safe-output-label-options",
+                "value-field": "safe-output-type"
+              }
+            ]
+          },
+          {
+            "id": "status",
+            "label": "Status",
+            "groups": [
+              {
+                "label": "Status",
+                "field": "issue-status-detail",
+                "source": "issue-status-label-options",
+                "value-field": "issue-status-detail"
+              }
+            ]
+          }
+        ]
+      },
+      "mark": "list",
+      "list": {
+        "style": "entity-cards",
+        "card": "issue",
+        "icon": "issue-opened",
+        "drill": {
+          "type": "external",
+          "field": "entity-url"
+        }
+      },
+      "empty-message": "No issue safe outputs were retained in the current report.",
+      "layout": "full-view",
+      "encoding": {
+        "columns": [
+          {
+            "field": "event-summary",
+            "type": "nominal",
+            "title": "Issue"
+          },
+          {
+            "field": "safe-output-type",
+            "type": "nominal",
+            "title": "Safe output",
+            "display": "label"
+          },
+          {
+            "field": "github-entity-type",
+            "type": "nominal",
+            "title": "Entity type"
+          },
+          {
+            "field": "entity-url",
+            "type": "nominal",
+            "title": "Entity URL"
+          },
+          {
+            "field": "repository",
+            "type": "nominal",
+            "title": "Repository"
+          },
+          {
+            "field": "workflow",
+            "type": "nominal",
+            "title": "Workflow",
+            "format": "workflow-relative-path"
+          },
+          {
+            "field": "run",
+            "type": "nominal",
+            "title": "Run",
+            "display": "run-link"
+          },
+          {
+            "field": "run-link",
+            "type": "nominal",
+            "title": "Run link"
+          },
+          {
+            "field": "observed-at",
+            "type": "temporal",
+            "format": "human-friendly-timestamp",
+            "title": "Opened"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "triage-review-readiness",
+  "task": {
+    "actor": "Repository operator",
+    "subject": "An issue-triage review workflow for the githubnext/gh-cao repository",
+    "intent": "Assess whether the issue-triage review workflow is activating on newly opened issues, producing bounded review outputs, and attaining its intended value of surfacing ready-to-triage issues with accepted evidence.",
+    "activationConditions": [
+      "A repository operator enables a standalone issue-triage review workflow on githubnext/gh-cao.",
+      "A newly opened issue in githubnext/gh-cao creates one stable triage opportunity for the workflow.",
+      "A workflow run associated with that issue is observed in the dashboard horizon."
+    ],
+    "requiredEffects": [
+      "For each eligible issue opportunity, the workflow evaluates the issue and emits at most one safe review output describing whether triage can proceed.",
+      "Accepted repository evidence must remain limited to the issue outcome, any linked finding, and the workflow run provenance for that same issue opportunity.",
+      "The workflow must leave ineligible, duplicate, or already-triaged issues without a new durable output."
+    ],
+    "noopConditions": [
+      "The issue is already labeled as triaged or closed before the workflow evaluates it.",
+      "The issue lacks the minimum issue body or repository context needed for a bounded triage review.",
+      "A prior accepted workflow output already covers the same issue opportunity."
+    ],
+    "successConditions": [
+      "The workflow activates for eligible issue opportunities within the selected horizon.",
+      "Observed outcomes for eligible opportunities are accepted or intentionally no-op with matching evidence strength and run provenance.",
+      "Operational-value observations preserve the ordered metrics published by gh-aw for each workflow run."
+    ],
+    "uncertainties": [
+      "A successful run does not by itself prove the durable issue outcome was accepted.",
+      "Pending or ignored safe outputs do not establish attained triage readiness.",
+      "A null operational-value metric must remain distinct from a numeric zero."
+    ]
+  },
+  "operationalValue": {
+    "upstream": "gh-aw",
+    "orderedMetrics": [
+      {
+        "id": "triage-readiness-attainment",
+        "unit": "ratio",
+        "direction": "higher_is_better"
+      }
+    ],
+    "preservation": "Preserve metric IDs, order, native finite values or null, units, and directions exactly as published by gh-aw."
+  },
+  "logicalSources": {
+    "workflows": {
+      "rows": [
+        {
+          "organization": "githubnext",
+          "repository": "gh-cao",
+          "workflow": ".github/workflows/issue-triage-review.yml",
+          "workflow-name": "Issue triage review",
+          "workflow-role": "standalone",
+          "workflow-active": "true",
+          "rollout-mode": "review",
+          "observed-at": "2026-09-01T00:00:00Z",
+          "repository-link": {
+            "relation": "repository",
+            "href": "https://github.com/githubnext/gh-cao",
+            "label": "githubnext/gh-cao"
+          },
+          "workflow-link": {
+            "relation": "workflow",
+            "href": "https://github.com/githubnext/gh-cao/actions/workflows/issue-triage-review.yml",
+            "label": "Issue triage review"
+          }
+        }
+      ]
+    }
+  },
+  "dashboard": "triage-review-readiness.dashboard.yml"
+}

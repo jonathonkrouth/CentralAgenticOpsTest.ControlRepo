@@ -1,0 +1,385 @@
+{
+  "queries": [
+    {
+      "name": "event-base",
+      "subject": "Project shared event fields before combining run-owned records.",
+      "objective": "Provide the narrow retained event evidence needed for inspection and run import-coverage analysis.",
+      "acceptance": "The result unions retained audit, domain, tool, and issue records with their available run identity; an empty or unavailable preview cannot establish zero source activity or complete import coverage.",
+      "from": "audits",
+      "union": [
+        "domains",
+        "tools",
+        "issues"
+      ],
+      "select": [
+        { "field": "organization" },
+        { "field": "repository" },
+        { "field": "workflow" },
+        { "field": "run" },
+        { "field": "run-attempt" },
+        { "field": "event" },
+        { "field": "event-source" },
+        { "field": "event-type" },
+        { "field": "event-summary" },
+        { "field": "event-status" },
+        { "field": "github-entity-type" },
+        { "field": "safe-output-type" },
+        { "field": "safe-output-url" },
+        { "field": "correlation-id" },
+        { "field": "implementation-pull-request-url" },
+        { "field": "event-timestamp" },
+        { "field": "run-link" }
+      ]
+    },
+    {
+      "name": "audit-event-runs",
+      "subject": "Count imported audit records per run before combining event sources.",
+      "objective": "Bound audit evidence for run import-coverage analysis.",
+      "acceptance": "Count only retained audit records with event identity by run attempt; missing evidence does not establish zero activity.",
+      "from": "audits",
+      "aggregate": {
+        "by": ["organization", "repository", "workflow", "run", "run-attempt"],
+        "values": [{ "field": "event", "as": "events", "reducer": "count" }]
+      }
+    },
+    {
+      "name": "domain-event-runs",
+      "subject": "Count imported domain records per run before combining event sources.",
+      "objective": "Bound domain evidence for run import-coverage analysis.",
+      "acceptance": "Count only retained domain records with event identity by run attempt; missing evidence does not establish zero activity.",
+      "from": "domains",
+      "aggregate": {
+        "by": ["organization", "repository", "workflow", "run", "run-attempt"],
+        "values": [{ "field": "event", "as": "events", "reducer": "count" }]
+      }
+    },
+    {
+      "name": "tool-event-runs",
+      "subject": "Count imported tool records per run before combining event sources.",
+      "objective": "Bound tool evidence for run import-coverage analysis.",
+      "acceptance": "Count only retained tool records with event identity by run attempt; missing evidence does not establish zero activity.",
+      "from": "tools",
+      "aggregate": {
+        "by": ["organization", "repository", "workflow", "run", "run-attempt"],
+        "values": [{ "field": "event", "as": "events", "reducer": "count" }]
+      }
+    },
+    {
+      "name": "issue-event-runs",
+      "subject": "Count imported issue records per run before combining event sources.",
+      "objective": "Bound issue evidence for run import-coverage analysis.",
+      "acceptance": "Count only retained issue records with event identity by run attempt; missing evidence does not establish zero activity.",
+      "from": "issues",
+      "aggregate": {
+        "by": ["organization", "repository", "workflow", "run", "run-attempt"],
+        "values": [{ "field": "event", "as": "events", "reducer": "count" }]
+      }
+    },
+    {
+      "name": "event-runs",
+      "subject": "Identify each workflow run that has one or more imported run-owned records.",
+      "objective": "Identify run attempts with retained imported records so their presence can be compared with observed runs.",
+      "acceptance": "One row per organization, repository, workflow, run, and attempt contains events, the count of matching retained records; no row in an available result does not prove that no event was produced.",
+      "description": "Distinct workflow runs represented by imported domain, tool, audit, or issue records.",
+      "from": "audit-event-runs",
+      "union": ["domain-event-runs", "tool-event-runs", "issue-event-runs"],
+      "aggregate": {
+        "by": [
+          "organization",
+          "repository",
+          "workflow",
+          "run",
+          "run-attempt"
+        ],
+        "values": [
+          {
+            "field": "events",
+            "as": "events",
+            "reducer": "sum"
+          }
+        ]
+      }
+    },
+    {
+      "name": "run-import-status",
+      "subject": "Identify observed runs that have one or more imported run-owned records.",
+      "objective": "Compare observed run attempts with retained run-owned event evidence to locate import-coverage gaps for investigation.",
+      "acceptance": "Keep each observed run and its run-attempt identity; imported-event-count is zero and imported is false without a matching retained event, but missing events alone do not establish an ingestion failure.",
+      "description": "Observed runs enriched with imported-record status.",
+      "from": "runs",
+      "joins": [
+        {
+          "source": "event-runs",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            },
+            {
+              "left": "workflow",
+              "right": "workflow"
+            },
+            {
+              "left": "run",
+              "right": "run"
+            },
+            {
+              "left": "run-attempt",
+              "right": "run-attempt"
+            }
+          ],
+          "fields": [
+            {
+              "field": "events",
+              "as": "imported-events"
+            }
+          ]
+        }
+      ],
+      "compute": [
+        {
+          "as": "imported-event-count",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "imported-events"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "imported",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "imported-event-count"
+            },
+            {
+              "value": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "workflow-run-totals",
+      "subject": "Summarize observed run counts and imported runs by declared workflow.",
+      "objective": "Compare observed run attempts, conclusions, and imported-record coverage for each workflow.",
+      "acceptance": "Group by organization, repository, and workflow; report distinct run-attempt totals, successful and failed conclusion counts, and imported-run totals only from retained evidence. Missing run records cannot establish zero execution.",
+      "description": "Observed run and imported-run totals for each declared workflow.",
+      "from": "run-import-status",
+      "compute": [
+        {
+          "as": "run-attempt-identity",
+          "function": "concat",
+          "args": [
+            {
+              "field": "run"
+            },
+            {
+              "value": ":"
+            },
+            {
+              "field": "run-attempt"
+            }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "organization",
+          "repository",
+          "workflow"
+        ],
+        "values": [
+          {
+            "field": "run-attempt-identity",
+            "as": "runs",
+            "reducer": "distinct-count"
+          },
+          {
+            "field": "run-conclusion",
+            "as": "successful-runs",
+            "reducer": "count",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "run-conclusion",
+                  "equals": "success"
+                }
+              ]
+            }
+          },
+          {
+            "field": "run-conclusion",
+            "as": "failed-runs",
+            "reducer": "count",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "run-conclusion",
+                  "in": [
+                    "failure",
+                    "startup-failure",
+                    "stale",
+                    "timed-out"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "field": "imported",
+            "as": "imported-runs",
+            "reducer": "sum"
+          }
+        ]
+      }
+    },
+    {
+      "name": "workflow-aic-run-totals",
+      "subject": "Summarize observed run attempts and AI Credits for workflow cost comparison.",
+      "objective": "Count retained run attempts and recorded AI Credits without loading imported-event coverage.",
+      "acceptance": "Count all distinct retained run attempts, but include only positive recorded AIC in cost totals and cost denominators; zero and missing telemetry cannot skew cost averages.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "run-attempt-identity",
+          "function": "concat",
+          "args": [{ "field": "run" }, { "value": ":" }, { "field": "run-attempt" }]
+        },
+        {
+          "as": "positive-aic",
+          "function": "greater-than",
+          "args": [{ "field": "aic-total" }, { "value": 0 }]
+        }
+      ],
+      "aggregate": {
+        "by": ["organization", "repository", "workflow"],
+        "values": [
+          { "field": "run-attempt-identity", "as": "runs", "reducer": "distinct-count" },
+          { "field": "run-attempt-identity", "as": "aic-runs", "reducer": "distinct-count", "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] } },
+          { "field": "aic-total", "as": "aic", "reducer": "sum", "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] } }
+        ]
+      }
+    },
+    {
+      "name": "workflow-aic-totals",
+      "subject": "Summarize observed AI Credit usage by declared workflow.",
+      "objective": "Expose retained AI Credit consumption per workflow for bounded cost review alongside observed execution.",
+      "acceptance": "Sum only positive recorded aic-total by organization, repository, and workflow; exclude zero and missing costs rather than treating them as free execution.",
+      "description": "Observed AI Credit totals for each declared workflow.",
+      "from": "workflow-aic-run-totals",
+      "filter": {
+        "predicates": [{ "field": "aic-runs", "gte": 1 }]
+      },
+      "select": [
+        { "field": "organization" }, { "field": "repository" }, { "field": "workflow" },
+        { "field": "aic" }, { "field": "aic-runs" }
+      ]
+    },
+    {
+      "name": "mcp-tool-workflow-totals",
+      "subject": "Summarize observed MCP calls by tool and workflow before the tool inventory is materialized.",
+      "objective": "Keep MCP inventory intermediates bounded without dropping calls or changing byte totals.",
+      "acceptance": "Count retained observation identities and sum request and response bytes per server, tool, and workflow; retain safe-output-server classification for downstream exclusion.",
+      "from": "mcp-calls",
+      "compute": [
+        {
+          "as": "safe-output-server",
+          "function": "equals-any",
+          "args": [{ "field": "mcp-server" }, { "value": "safe_outputs" }, { "value": "safeoutputs" }]
+        },
+        {
+          "as": "mcp-tool-label",
+          "function": "concat",
+          "args": [{ "field": "mcp-server" }, { "value": "/" }, { "field": "mcp-tool" }]
+        },
+        {
+          "as": "workflow-key",
+          "function": "concat",
+          "args": [
+            { "field": "organization" }, { "value": "/" }, { "field": "repository" },
+            { "value": ":" }, { "field": "workflow" }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": ["safe-output-server", "mcp-tool-label", "mcp-server", "mcp-tool", "workflow-key"],
+        "values": [
+          { "field": "mcp-observation", "as": "calls", "reducer": "count" },
+          { "field": "request-bytes", "as": "request-bytes", "reducer": "sum" },
+          { "field": "response-bytes", "as": "response-bytes", "reducer": "sum" }
+        ]
+      }
+    },
+    {
+      "name": "mcp-tool-calls",
+      "subject": "Prepare MCP tool calls for aggregation with safe-output-server calls identified for downstream exclusion.",
+      "objective": "Identify retained MCP call labels and safe-output-server classification for downstream tool-use investigation.",
+      "acceptance": "Preserve each retained call with its workflow key and tool label and mark safe-output-server calls explicitly; downstream exclusion must not be mistaken for absence of those calls or complete tool telemetry.",
+      "description": "Observed MCP tool calls labeled with whether they belong to the internal safe outputs server.",
+      "from": "mcp-calls",
+      "compute": [
+        {
+          "as": "safe-output-server",
+          "function": "equals-any",
+          "args": [
+            {
+              "field": "mcp-server"
+            },
+            {
+              "value": "safe_outputs"
+            },
+            {
+              "value": "safeoutputs"
+            }
+          ]
+        },
+        {
+          "as": "mcp-tool-label",
+          "function": "concat",
+          "args": [
+            {
+              "field": "mcp-server"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "mcp-tool"
+            }
+          ]
+        },
+        {
+          "as": "workflow-key",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            },
+            {
+              "value": ":"
+            },
+            {
+              "field": "workflow"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

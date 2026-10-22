@@ -1,0 +1,266 @@
+/**
+ * Reusable presentation-only link helpers for dashboard views.
+ */
+
+import { h } from '../dom.js';
+import { createDebug } from '../debug.js';
+import { isPlainObject, isSafeHttpsUrl } from './ui-primitives.js';
+
+const debugLinkContent = createDebug('link-content');
+
+/**
+ * @typedef {{ href: string, label: string, externalHref?: string }} SafeLink
+ */
+
+/**
+ * @param {Array<Record<string, unknown>>} rows
+ * @param {string} field
+ * @returns {SafeLink | null}
+ */
+export function findFirstLink(rows, field) {
+  for (const row of rows) {
+    const link = findLink(row, field);
+    if (link) {
+      return link;
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {Record<string, unknown>} row
+ * @param {string} field
+ * @returns {SafeLink | null}
+ */
+export function findLink(row, field) {
+  const candidate = row[field];
+  if (!isPlainObject(candidate)) {
+    return null;
+  }
+  const dashboardHref = typeof candidate['dashboard-href'] === 'string' && candidate['dashboard-href'].startsWith('#page-')
+    ? candidate['dashboard-href']
+    : null;
+  const dashboardLabel = typeof candidate['dashboard-label'] === 'string' && candidate['dashboard-label'].trim().length > 0
+    ? candidate['dashboard-label']
+    : null;
+  const externalHref = typeof candidate.href === 'string' && isSafeHttpsUrl(candidate.href)
+    ? candidate.href
+    : null;
+  const externalLabel = typeof candidate.label === 'string' && candidate.label.trim().length > 0
+    ? candidate.label
+    : null;
+  if (dashboardHref && dashboardLabel) {
+    return {
+      href: dashboardHref,
+      label: dashboardLabel,
+      ...(externalHref && externalLabel ? { externalHref } : {})
+    };
+  }
+  if (externalHref && externalLabel) {
+    return { href: externalHref, label: externalLabel };
+  }
+  debugLinkContent({ event: 'link-unresolved', field, hasDashboardHref: Boolean(dashboardHref), hasExternalHref: Boolean(externalHref) });
+  return null;
+}
+
+/**
+ * Determines whether a resolved safe link points outside the dashboard (as
+ * opposed to an internal `#`-prefixed navigation anchor). Every safe-link
+ * anchor renderer in this module bases its `target`/`rel` wiring on this
+ * check.
+ * @param {SafeLink} link
+ * @returns {boolean}
+ */
+function isExternalLink(link) {
+  return !link.href.startsWith('#');
+}
+
+/**
+ * Device context is not part of Dashboard Language; keep this navigation
+ * behavior in the shared renderer, not in individual views or link data.
+ * @returns {boolean}
+ */
+function isMobileDevice() {
+  if (typeof navigator === 'undefined') return false;
+  const browser = /** @type {Navigator & { userAgentData?: { mobile?: boolean } }} */ (navigator);
+  return browser.userAgentData?.mobile === true
+    || /Android|iPhone|iPad|iPod/i.test(browser.userAgent)
+    || (/Macintosh/i.test(browser.userAgent) && browser.maxTouchPoints > 1);
+}
+
+/**
+ * @param {string} href
+ * @returns {boolean}
+ */
+function isGitHubAppLink(href) {
+  if (!isSafeHttpsUrl(href)) return false;
+  const url = new URL(href);
+  return url.hostname === 'github.com' && url.port === '';
+}
+
+/**
+ * Builds the shared anchor attribute set used by every safe-link renderer in
+ * this module. Mobile GitHub links use HTTPS Universal Links / Android App
+ * Links in the current context so the OS can open GitHub Mobile when enabled,
+ * or fall back to the browser without custom schemes, timers, or redirects.
+ * Other external links retain a new tab; internal navigation stays unchanged.
+ * @param {SafeLink} link
+ * @param {boolean} external
+ * @returns {{ href: string, target: string | undefined, rel: string | undefined, 'aria-label': string }}
+ */
+function safeLinkAnchorAttrs(link, external) {
+  return {
+    href: link.href,
+    target: external ? (isMobileDevice() && isGitHubAppLink(link.href) ? '_self' : '_blank') : undefined,
+    rel: external ? 'noopener noreferrer' : undefined,
+    'aria-label': link.label
+  };
+}
+
+/**
+ * Builds the device-aware attribute set for an external anchor with
+ * `rel="noopener noreferrer"` for callers that already hold a raw href/label
+ * pair rather than a resolved {@link SafeLink}. Shares the same
+ * target/rel/aria-label wiring as every other safe-link anchor in this
+ * module.
+ * @param {string} href
+ * @param {string} label
+ * @returns {{ href: string, target: string | undefined, rel: string | undefined, 'aria-label': string }}
+ */
+export function externalAnchorAttrs(href, label) {
+  return safeLinkAnchorAttrs({ href, label }, true);
+}
+
+/**
+ * Renders a github.com Actions run URL as an external link labeled with its run ID.
+ * @param {unknown} value
+ * @returns {HTMLElement | null}
+ */
+export function renderWorkflowRunUrl(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    const match = url.pathname.match(/^\/[^/]+\/[^/]+\/actions\/runs\/([1-9]\d*)\/?$/);
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || !match) {
+      debugLinkContent({ event: 'workflow-run-url-rejected', protocol: url.protocol, hostname: url.hostname });
+      return null;
+    }
+    return renderExternalLink({ href: url.href, label: match[1] });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Renders an HTTPS URL as an external link with its intermediate path replaced by an ellipsis.
+ * @param {unknown} value
+ * @returns {HTMLElement | null}
+ */
+export function renderShortenedUrl(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') {
+      debugLinkContent({ event: 'shortened-url-rejected', protocol: url.protocol });
+      return null;
+    }
+    const segments = url.pathname.split('/').filter(Boolean);
+    const label = segments.length > 1
+      ? `${url.origin}/.../${segments.at(-1)}`
+      : url.href;
+    return renderExternalLink({ href: url.href, label });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {SafeLink} link
+ * @returns {HTMLElement}
+ */
+export function renderExternalLink(link) {
+  const external = isExternalLink(link);
+  return h('a', safeLinkAnchorAttrs(link, external), link.label);
+}
+
+/**
+ * Renders a safe link when present, falling back to plain content otherwise.
+ * @param {SafeLink | null} link
+ * @param {string} [labelOverride] Overrides the link's label when present.
+ * @param {unknown} [fallback] Content rendered when no safe link is available.
+ * @returns {HTMLElement | unknown}
+ */
+export function renderExternalLinkOrFallback(link, labelOverride, fallback = null) {
+  return link ? renderExternalLink(labelOverride ? { ...link, label: labelOverride } : link) : fallback;
+}
+
+/**
+ * Renders a workflow run label as a link when the row includes a safe run link.
+ * @param {Record<string, unknown>} row
+ * @param {string} label
+ * @param {unknown} [trailingContent] Optional content appended to the linked label.
+ * @returns {string | HTMLElement}
+ */
+export function renderWorkflowRunLink(row, label, trailingContent) {
+  const link = findLink(row, 'run-link');
+  return link ? h('a', safeLinkAnchorAttrs(link, isExternalLink(link)), label, trailingContent) : label;
+}
+
+/**
+ * Resolves a compact #identifier link from JSON-selected row fields.
+ * @param {Record<string, unknown>} row
+ * @param {unknown} config
+ * @returns {SafeLink | null}
+ */
+export function resolveTitleLink(row, config) {
+  if (!isPlainObject(config)) return null;
+  const hrefField = config['href-field'];
+  const identifierField = config['identifier-field'];
+  if (typeof hrefField !== 'string' || typeof identifierField !== 'string') return null;
+  const link = findLink(row, hrefField);
+  const value = row[identifierField];
+  const identifier = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+  if (!link || identifier.length === 0 || identifier.length > 100) return null;
+  return {
+    href: link.externalHref ?? link.href,
+    label: `Open #${identifier} on GitHub`
+  };
+}
+
+/**
+ * Renders a durable-output title as an internal detail link.
+ * @param {Record<string, unknown>} row
+ * @param {string} label
+ * @returns {string | HTMLElement}
+ */
+export function renderOutcomeLink(row, label) {
+  const outcomeId = typeof row['safe-output'] === 'string' ? row['safe-output'].trim() : '';
+  return outcomeId && outcomeId.length <= 700
+    ? h('a', {
+        href: `#page-outcome-detail?outcome=${encodeURIComponent(outcomeId)}`,
+        title: label
+      }, label)
+    : label;
+}
+
+/**
+ * Renders arbitrary content as a safe anchor when a link is available, otherwise returns the
+ * content unchanged. Shares the external-link detection and target/rel/aria-label wiring used
+ * by every safe-link renderer in the dashboard so anchor semantics stay consistent.
+ * @param {string | HTMLElement} content
+ * @param {SafeLink | null} link
+ * @returns {string | HTMLElement}
+ */
+export function renderSafeLink(content, link) {
+  if (!link) return content;
+  return h('a', safeLinkAnchorAttrs(link, isExternalLink(link)), content);
+}
+
+/**
+ * @param {string | HTMLElement} value
+ * @param {SafeLink | null} link
+ * @returns {string | HTMLElement}
+ */
+export function renderLinkedValue(value, link) {
+  return renderSafeLink(value, link);
+}

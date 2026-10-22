@@ -1,0 +1,52 @@
+{
+  "$schema": "https://raw.githubusercontent.com/githubnext/gh-cao/main/.github/workflows/shared/cao.schema.json",
+  "control-plane": {
+    "activity": {
+      "public-only": true,
+      "repositories": [
+        "jonathonkrouth/CentralAgenticOpsTest.ControlRepo",
+        "jonathonkrouth/CentralAgenticOpsTest.Repo1",
+        "jonathonkrouth/CentralAgenticOpsTest.Repo2",
+        "jonathonkrouth/CentralAgenticOpsTest.Repo3"
+      ]
+    },
+    "campaigns": {},
+    "marketplace": {
+      "registries": [
+        {
+          "auth": {
+            "type": "none"
+          },
+          "id": "official",
+          "name": "Official CAO catalog",
+          "ref": "main",
+          "repository": "githubnext/gh-cao"
+        },
+        {
+          "auth": {
+            "type": "none"
+          },
+          "format": "workflows",
+          "id": "agentics",
+          "name": "Agentics workflows",
+          "path": "workflows",
+          "ref": "main",
+          "repository": "githubnext/agentics"
+        }
+      ]
+    },
+    "scope": {
+      "allowed-owners": [
+        "jonathonkrouth"
+      ],
+      "allowed-repositories": [
+        "jonathonkrouth/CentralAgenticOpsTest.ControlRepo",
+        "jonathonkrouth/CentralAgenticOpsTest.Repo1",
+        "jonathonkrouth/CentralAgenticOpsTest.Repo2",
+        "jonathonkrouth/CentralAgenticOpsTest.Repo3"
+      ]
+    }
+  },
+  "gh-aw-version": "v0.92.6",
+  "version": 1
+}

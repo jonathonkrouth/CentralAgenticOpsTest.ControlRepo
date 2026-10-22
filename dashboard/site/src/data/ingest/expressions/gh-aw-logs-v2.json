@@ -1,0 +1,53 @@
+{
+  "contract": "gh-aw-cao.jsonl-ingestion",
+  "version": 1,
+  "source": "gh-aw-logs",
+  "sourceSchemaVersions": [2, 4, 5],
+  "variants": {
+    "operational_value_evidence": {
+      "payloadPath": "operational_value_evidence",
+      "emits": ["repository", "operational-value-evidence"],
+      "identity": ["id"]
+    },
+    "workflow_runs": {
+      "payloadPath": "payload",
+      "emits": ["repository", "workflow", "run"],
+      "identity": ["databaseId", "attempt"]
+    },
+    "run": {
+      "payloadPath": "run",
+      "emits": ["repository", "workflow", "run", "domain", "tool", "skill", "friction", "audit", "issue", "experiment", "experiment-assignment", "grader", "grader-observation", "eval", "eval-observation"],
+      "identity": ["run_id", "run_attempt"]
+    },
+    "token_efficiency_run_context": {
+      "payloadPath": "run",
+      "emits": ["repository", "workflow", "run", "domain", "tool", "skill", "friction", "audit", "issue", "experiment", "experiment-assignment", "grader", "grader-observation", "eval", "eval-observation"],
+      "identity": ["run_id", "run_attempt"]
+    },
+    "safe_output_item": {
+      "payloadPath": "safe_output",
+      "emits": ["issue", "audit"],
+      "identity": ["run_id", "type", "url", "timestamp"]
+    },
+    "token_efficiency_observation": {
+      "payloadPath": "observation",
+      "emits": ["audit"],
+      "identity": ["optimizerRunId", "runAttempt", "opportunityId", "interventionId"]
+    },
+    "token_efficiency_lifecycle_observation": {
+      "payloadPath": "observation",
+      "emits": ["audit"],
+      "identity": ["optimizerRunId", "lifecycleObservationId"]
+    },
+    "github_api_rate_limit": {
+      "payloadPath": "rate_limit",
+      "emits": ["audit"],
+      "requiresContext": ["repository", "workflow", "run", "observedAt"]
+    },
+    "operational_value": {
+      "payloadPath": "operational_value",
+      "emits": ["repository", "operational-value"],
+      "identity": ["repository", "value_id", "timestamp"]
+    }
+  }
+}

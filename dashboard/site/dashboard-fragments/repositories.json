@@ -1,0 +1,1928 @@
+{
+  "queries": [
+    {
+      "name": "entity-workflow-run-totals",
+      "subject": "Summarize run outcomes and AI Credit consumption for reusable workflow cards.",
+      "objective": "Compare retained run-attempt activity, recorded conclusions, and AI Credit usage per workflow card.",
+      "acceptance": "Group by organization, repository, and workflow; expose distinct run-attempt count, success/failure conclusion counts, and sum of recorded AIC, without treating missing run history as zero actual activity.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "run-attempt-identity",
+          "function": "concat",
+          "args": [
+            {
+              "field": "run"
+            },
+            {
+              "value": ":"
+            },
+            {
+              "field": "run-attempt"
+            }
+          ]
+        },
+        {
+          "as": "positive-aic",
+          "function": "greater-than",
+          "args": [{ "field": "aic-total" }, { "value": 0 }]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "organization",
+          "repository",
+          "workflow"
+        ],
+        "values": [
+          {
+            "field": "run-attempt-identity",
+            "as": "runs",
+            "reducer": "distinct-count"
+          },
+          {
+            "field": "run-attempt-identity",
+            "as": "aic-runs",
+            "reducer": "distinct-count",
+            "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] }
+          },
+          {
+            "field": "run-conclusion",
+            "as": "successful-runs",
+            "reducer": "count",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "run-conclusion",
+                  "equals": "success"
+                }
+              ]
+            }
+          },
+          {
+            "field": "run-conclusion",
+            "as": "failed-runs",
+            "reducer": "count",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "run-conclusion",
+                  "in": [
+                    "failure",
+                    "startup-failure",
+                    "stale",
+                    "timed-out"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "field": "aic-total",
+            "as": "aic",
+            "reducer": "sum",
+            "filter": { "predicates": [{ "field": "positive-aic", "equals": true }] }
+          }
+        ]
+      }
+    },
+    {
+      "name": "entity-workflows",
+      "subject": "Project workflow entities for reusable workflow cards and repository drill-down.",
+      "objective": "Relate declared workflows to observed run and AIC totals for workflow-level drill-down.",
+      "acceptance": "Keep declared workflow identity, role, registration, campaign, link, and joined totals; a missing run match defaults to displayed zeros but does not establish no executions or outcomes.",
+      "from": "workflows",
+      "joins": [
+        {
+          "source": "entity-workflow-run-totals",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            },
+            {
+              "left": "workflow",
+              "right": "workflow"
+            }
+          ],
+          "fields": [
+            {
+              "field": "runs",
+              "as": "observed-runs"
+            },
+            {
+              "field": "successful-runs",
+              "as": "observed-successful-runs"
+            },
+            {
+              "field": "failed-runs",
+              "as": "observed-failed-runs"
+            },
+            {
+              "field": "aic",
+              "as": "observed-aic"
+            },
+            {
+              "field": "aic-runs",
+              "as": "observed-aic-runs"
+            }
+          ]
+        }
+      ],
+      "compute": [
+        {
+          "as": "runs",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "successful-runs",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-successful-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "failed-runs",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-failed-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "aic",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-aic"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "aic-per-run",
+          "function": "quotient",
+          "args": [
+            {
+              "field": "aic"
+            },
+            {
+              "field": "observed-aic-runs"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "organization"
+        },
+        {
+          "field": "repository"
+        },
+        {
+          "field": "workflow"
+        },
+        {
+          "field": "workflow-name"
+        },
+        {
+          "field": "workflow-role"
+        },
+        {
+          "field": "workflow-active"
+        },
+        {
+          "field": "campaign-name"
+        },
+        {
+          "field": "observed-at"
+        },
+        {
+          "field": "runs"
+        },
+        {
+          "field": "successful-runs"
+        },
+        {
+          "field": "failed-runs"
+        },
+        {
+          "field": "aic-per-run"
+        },
+        {
+          "field": "workflow-link"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "repository",
+          "direction": "asc"
+        },
+        {
+          "field": "workflow",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "repository-runs",
+      "subject": "Project canonical runs into repository-addressable run evidence.",
+      "objective": "Expose retained run chronology and status for a selected repository's drill-down.",
+      "acceptance": "Retain repository coordinate, workflow, run identity, title, event, start time, conclusion, mode, AIC, and run link; absent details or runs do not establish a healthy or idle repository.",
+      "description": "Workflow runs with a stable repository route key.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "repository-coordinate",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "repository-coordinate"
+        },
+        {
+          "field": "workflow"
+        },
+        {
+          "field": "run"
+        },
+        {
+          "field": "run-title"
+        },
+        {
+          "field": "event"
+        },
+        {
+          "field": "started-at"
+        },
+        {
+          "field": "run-status"
+        },
+        {
+          "field": "run-conclusion"
+        },
+        {
+          "field": "rollout-mode"
+        },
+        {
+          "field": "aic-total"
+        },
+        {
+          "field": "run-link"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "started-at",
+          "direction": "desc"
+        },
+        {
+          "field": "run",
+          "direction": "desc"
+        }
+      ]
+    },
+    {
+      "name": "repository-workflow-totals",
+      "subject": "Summarize declared and disabled workflow counts by repository.",
+      "objective": "Compare declared and disabled workflow counts for each repository in the retained workflow inventory.",
+      "acceptance": "Count declared workflows and workflow-active=false entries by organization and repository; missing declarations must not be interpreted as a complete zero-workflow inventory.",
+      "description": "Declared and disabled workflow totals for each repository.",
+      "from": "workflows",
+      "aggregate": {
+        "by": [
+          "organization",
+          "repository"
+        ],
+        "values": [
+          {
+            "field": "workflow",
+            "as": "workflows",
+            "reducer": "count"
+          },
+          {
+            "field": "workflow",
+            "as": "disabled",
+            "reducer": "count",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "workflow-active",
+                  "equals": "false"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "repository-report-totals",
+      "subject": "Summarize published outcome report counts by repository.",
+      "objective": "Show retained outcome-report volume per repository for comparison with observed execution.",
+      "acceptance": "Count retained outcome rows by organization and repository; a missing aggregate does not prove no reports were published or that reported outcomes succeeded.",
+      "description": "Published report totals for each repository.",
+      "from": "outcomes",
+      "aggregate": {
+        "by": [
+          "organization",
+          "repository"
+        ],
+        "values": [
+          {
+            "field": "repository",
+            "as": "reports",
+            "reducer": "count"
+          }
+        ]
+      }
+    },
+    {
+      "name": "repository-run-identities",
+      "subject": "Project the run-attempt identities needed to match imported evidence.",
+      "objective": "Keep import-coverage joins narrow without carrying run details, links, or costs.",
+      "acceptance": "Preserve each selected run attempt and its organization, repository, workflow, run, and attempt keys. Do not deduplicate attempts or change selected-horizon semantics.",
+      "from": "runs",
+      "select": [
+        { "field": "organization" }, { "field": "repository" }, { "field": "workflow" },
+        { "field": "run" }, { "field": "run-attempt" }
+      ]
+    },
+    {
+      "name": "repository-import-totals",
+      "subject": "Count selected run attempts with matching retained imported records.",
+      "objective": "Join compact run identities to already reduced event evidence, then reduce import coverage by repository.",
+      "acceptance": "Match all five run-attempt keys and count each selected run row once when events are positive. Preserve optional-evidence quality and horizon filters; records for unselected runs do not establish coverage.",
+      "from": "repository-run-identities",
+      "joins": [
+        {
+          "source": "event-runs", "type": "left",
+          "on": [
+            { "left": "organization", "right": "organization" },
+            { "left": "repository", "right": "repository" },
+            { "left": "workflow", "right": "workflow" },
+            { "left": "run", "right": "run" },
+            { "left": "run-attempt", "right": "run-attempt" }
+          ],
+          "fields": [{ "field": "events", "as": "imported-events" }]
+        }
+      ],
+      "compute": [
+        {
+          "as": "imported", "function": "greater-than",
+          "args": [{ "field": "imported-events" }, { "value": 0 }]
+        }
+      ],
+      "aggregate": {
+        "by": ["organization", "repository"],
+        "values": [{ "field": "imported", "as": "imported-runs", "reducer": "sum" }]
+      }
+    },
+    {
+      "name": "repository-run-totals",
+      "subject": "Summarize distinct runs, failures, and approval-required runs by repository.",
+      "objective": "Join already reduced run statistics and import coverage at repository grain.",
+      "acceptance": "Group by organization and repository; preserve distinct run IDs, configured failure/action-required conclusion counts, and imported-run sums. Missing enrichment or run history must not be treated as complete coverage.",
+      "description": "Distinct run and conclusion totals for each repository.",
+      "from": "repository-run-statistics",
+      "joins": [
+        {
+          "source": "repository-import-totals",
+          "type": "left",
+          "on": [
+            { "left": "organization", "right": "organization" },
+            { "left": "repository", "right": "repository" }
+          ],
+          "fields": [
+            { "field": "imported-runs", "as": "imported-runs" }
+          ]
+        }
+      ],
+      "select": [
+        { "field": "organization" }, { "field": "repository" }, { "field": "runs" },
+        { "field": "failed" }, { "field": "action-required" }, { "field": "imported-runs" }
+      ]
+    },
+    {
+      "name": "repository-activity-preview",
+      "subject": "List repository identities before execution metrics are computed.",
+      "objective": "Show retained repository identities and drill links while activity metrics are pending.",
+      "acceptance": "List repositories by organization with repository drill links; this preview does not establish activity totals or outcomes.",
+      "description": "Fast repository inventory with drill links; activity fields remain pending.",
+      "from": "repositories",
+      "compute": [
+        {
+          "as": "repository-slug",
+          "function": "concat",
+          "args": [
+            { "field": "organization" },
+            { "value": "/" },
+            { "field": "repository" }
+          ]
+        },
+        {
+          "as": "encoded-repository",
+          "function": "url-encode",
+          "args": [{ "field": "repository-slug" }]
+        },
+        {
+          "as": "repository-dashboard-href",
+          "function": "concat",
+          "args": [
+            { "value": "#page-repository-detail?repository=" },
+            { "field": "encoded-repository" }
+          ]
+        },
+        {
+          "as": "repository-dashboard-label",
+          "function": "concat",
+          "args": [
+            { "value": "View " },
+            { "field": "repository-slug" },
+            { "value": " repository dashboard" }
+          ]
+        },
+        {
+          "as": "repository-dashboard-link",
+          "function": "dashboard-link",
+          "args": [
+            { "field": "repository-link" },
+            { "field": "repository-dashboard-href" },
+            { "field": "repository-dashboard-label" },
+            { "field": "repository-slug" }
+          ]
+        }
+      ],
+      "select": [
+        { "field": "organization" },
+        { "field": "repository-slug", "as": "repository" },
+        { "field": "repository-dashboard-link", "as": "repository-link" }
+      ],
+      "order-by": [{ "field": "repository", "direction": "asc" }]
+    },
+    {
+      "name": "repository-activity-core",
+      "subject": "Join each repository with its workflow, report, and run totals.",
+      "objective": "Attach retained workflow, report, and run aggregates to each repository for bounded inventory review.",
+      "acceptance": "Preserve each repository and the available joined aggregates by organization and repository; unmatched metrics remain missing evidence, not confirmed zero activity or evaluated outcomes.",
+      "description": "Repository inventory joined with workflow, report, evaluation, and run totals.",
+      "from": "repositories",
+      "joins": [
+        {
+          "source": "repository-workflow-totals",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            }
+          ],
+          "fields": [
+            {
+              "field": "workflows",
+              "as": "observed-workflows"
+            },
+            {
+              "field": "disabled",
+              "as": "observed-disabled"
+            }
+          ]
+        },
+        {
+          "source": "repository-report-totals",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            }
+          ],
+          "fields": [
+            {
+              "field": "reports",
+              "as": "observed-reports"
+            }
+          ]
+        },
+        {
+          "source": "repository-run-totals",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            }
+          ],
+          "fields": [
+            {
+              "field": "runs",
+              "as": "observed-runs"
+            },
+            {
+              "field": "failed",
+              "as": "observed-failed"
+            },
+            {
+              "field": "action-required",
+              "as": "observed-action-required"
+            },
+            {
+              "field": "imported-runs",
+              "as": "observed-imported-runs"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repository-activity",
+      "subject": "Show repository-level execution health, outcome activity, and AI Credit usage in an actionable inventory.",
+      "objective": "Prioritize repository drill-down using declared workflows, observed runs, reports, failures, import coverage, and AIC.",
+      "acceptance": "Return repository identity and link with retained counts, ingestion indicator, failure summary, AIC, and computed status; statuses describe retained evidence only, and an empty or unavailable preview cannot verify health, outcomes, or zero activity.",
+      "description": "Repository-local execution health and attributed outcome totals.",
+      "from": "repository-activity-core",
+      "joins": [
+        {
+          "source": "repository-aic-totals",
+          "type": "left",
+          "on": [
+            {
+              "left": "organization",
+              "right": "organization"
+            },
+            {
+              "left": "repository",
+              "right": "repository"
+            }
+          ],
+          "fields": [
+            {
+              "field": "aic",
+              "as": "observed-aic"
+            }
+          ]
+        }
+      ],
+      "compute": [
+        {
+          "as": "repository-slug",
+          "function": "concat",
+          "args": [
+            {
+              "field": "organization"
+            },
+            {
+              "value": "/"
+            },
+            {
+              "field": "repository"
+            }
+          ]
+        },
+        {
+          "as": "workflows",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-workflows"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "disabled",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-disabled"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "runs",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "failed",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-failed"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "imported-runs",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-imported-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "ingestion-rate",
+          "function": "quotient",
+          "args": [
+            {
+              "field": "imported-runs"
+            },
+            {
+              "field": "runs"
+            }
+          ]
+        },
+        {
+          "as": "ingestion",
+          "function": "format-percent",
+          "args": [
+            {
+              "field": "ingestion-rate"
+            }
+          ]
+        },
+        {
+          "as": "action-required",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-action-required"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "aic",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-aic"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "has-failures",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "failed"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "has-action-required",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "action-required"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "has-runs",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "has-disabled",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "disabled"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "outcomes-observed",
+          "function": "coalesce",
+          "args": [
+            {
+              "field": "observed-reports"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "has-outcomes",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "outcomes-observed"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "failure-rate",
+          "function": "quotient",
+          "args": [
+            {
+              "field": "failed"
+            },
+            {
+              "field": "runs"
+            }
+          ]
+        },
+        {
+          "as": "failure-percent",
+          "function": "format-percent",
+          "args": [
+            {
+              "field": "failure-rate"
+            }
+          ]
+        },
+        {
+          "as": "failure-count",
+          "function": "format-count",
+          "args": [
+            {
+              "field": "failed"
+            }
+          ]
+        },
+        {
+          "as": "observed-failure-summary",
+          "function": "concat",
+          "args": [
+            {
+              "field": "failure-percent"
+            },
+            {
+              "value": " · "
+            },
+            {
+              "field": "failure-count"
+            },
+            {
+              "value": " failed"
+            }
+          ]
+        },
+        {
+          "as": "failure-summary",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-runs"
+            },
+            {
+              "field": "observed-failure-summary"
+            },
+            {
+              "value": "—"
+            }
+          ]
+        },
+        {
+          "as": "outcome-status",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-outcomes"
+            },
+            {
+              "value": "Outcomes observed"
+            },
+            {
+              "value": "No recent activity"
+            }
+          ]
+        },
+        {
+          "as": "disabled-status",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-disabled"
+            },
+            {
+              "value": "Disabled workflows"
+            },
+            {
+              "field": "outcome-status"
+            }
+          ]
+        },
+        {
+          "as": "run-status",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-runs"
+            },
+            {
+              "value": "No failures observed"
+            },
+            {
+              "field": "disabled-status"
+            }
+          ]
+        },
+        {
+          "as": "action-status",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-action-required"
+            },
+            {
+              "value": "Approval required"
+            },
+            {
+              "field": "run-status"
+            }
+          ]
+        },
+        {
+          "as": "status",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-failures"
+            },
+            {
+              "value": "Needs attention"
+            },
+            {
+              "field": "action-status"
+            }
+          ]
+        },
+        {
+          "as": "encoded-repository",
+          "function": "url-encode",
+          "args": [
+            {
+              "field": "repository-slug"
+            }
+          ]
+        },
+        {
+          "as": "repository-dashboard-href",
+          "function": "concat",
+          "args": [
+            {
+              "value": "#page-repository-detail?repository="
+            },
+            {
+              "field": "encoded-repository"
+            }
+          ]
+        },
+        {
+          "as": "repository-dashboard-label",
+          "function": "concat",
+          "args": [
+            {
+              "value": "View "
+            },
+            {
+              "field": "repository-slug"
+            },
+            {
+              "value": " repository dashboard"
+            }
+          ]
+        },
+        {
+          "as": "repository-dashboard-link",
+          "function": "dashboard-link",
+          "args": [
+            {
+              "field": "repository-link"
+            },
+            {
+              "field": "repository-dashboard-href"
+            },
+            {
+              "field": "repository-dashboard-label"
+            },
+            {
+              "field": "repository-slug"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "organization"
+        },
+        {
+          "field": "repository",
+          "as": "repository-name"
+        },
+        {
+          "field": "repository-slug",
+          "as": "repository"
+        },
+        {
+          "field": "workflows"
+        },
+        {
+          "field": "observed-reports",
+          "as": "reports"
+        },
+        {
+          "field": "runs"
+        },
+        {
+          "field": "ingestion"
+        },
+        {
+          "field": "failure-summary"
+        },
+        {
+          "field": "aic"
+        },
+        {
+          "field": "status"
+        },
+        {
+          "field": "repository-dashboard-link",
+          "as": "repository-link"
+        },
+        {
+          "field": "failed"
+        }
+      ],
+      "order-by": [
+        {
+          "field": "failed",
+          "direction": "desc"
+        },
+        {
+          "field": "runs",
+          "direction": "desc"
+        },
+        {
+          "field": "repository",
+          "direction": "asc"
+        }
+      ]
+    },
+    {
+      "name": "repository-observed-run-counts",
+      "subject": "Count distinct retained run IDs by repository without importing event evidence.",
+      "objective": "Supply the run-volume chart without computing activity health, ingestion coverage, or workflow costs.",
+      "acceptance": "Group by organization and repository coordinate and count distinct retained run IDs, not attempts; missing runs remain missing evidence and global scope and time filters still apply.",
+      "from": "runs",
+      "compute": [
+        {
+          "as": "repository-coordinate",
+          "function": "concat",
+          "args": [
+            { "field": "organization" },
+            { "value": "/" },
+            { "field": "repository" }
+          ]
+        }
+      ],
+      "aggregate": {
+        "by": ["organization", "repository-coordinate"],
+        "values": [{ "field": "run", "as": "runs", "reducer": "distinct-count" }]
+      }
+    },
+    {
+      "name": "repository-run-inventory",
+      "subject": "Registered repositories and distinct retained workflow run IDs in the selected horizon.",
+      "objective": "Compare repository execution volume and choose repositories for drill-down.",
+      "acceptance": "Keep up to 100 repository identities and drill links, ordered by run count descending with repository tie-breaks. Zero means no retained runs, not proof of inactivity; preserve unavailable and partial evidence. The Table view retains the full inventory.",
+      "from": "repository-activity-preview",
+      "joins": [
+        {
+          "source": "repository-observed-run-counts",
+          "type": "left",
+          "on": [
+            { "left": "organization", "right": "organization" },
+            { "left": "repository", "right": "repository-coordinate" }
+          ],
+          "fields": [{ "field": "runs", "as": "observed-runs" }]
+        }
+      ],
+      "compute": [
+        {
+          "as": "runs",
+          "function": "coalesce",
+          "args": [{ "field": "observed-runs" }, { "value": 0 }]
+        }
+      ],
+      "select": [
+        { "field": "organization" },
+        { "field": "repository" },
+        { "field": "runs" },
+        { "field": "repository-link" }
+      ],
+      "order-by": [
+        { "field": "runs", "direction": "desc" },
+        { "field": "repository", "direction": "asc" }
+      ],
+      "limit": 100
+    }
+  ],
+  "views": [
+    {
+      "id": "repository-workflows",
+      "title": "Workflows",
+      "description": "Declared workflows for the selected repository.",
+      "data": {
+        "source": "entity-workflows",
+        "arguments": [
+          {
+            "name": "organization",
+            "field": "organization"
+          },
+          {
+            "name": "repository",
+            "field": "repository"
+          }
+        ]
+      },
+      "mark": "list",
+      "list": {
+        "style": "entity-cards",
+        "card": "workflow",
+        "icon": "workflow",
+        "drill": {
+          "type": "query",
+          "page": "workflow-run-cards",
+          "query": "entity-runs",
+          "title-field": "workflow",
+          "arguments": [
+            {
+              "name": "organization",
+              "field": "organization"
+            },
+            {
+              "name": "repository",
+              "field": "repository"
+            },
+            {
+              "name": "workflow",
+              "field": "workflow"
+            }
+          ]
+        }
+      },
+      "empty-message": "No workflows were observed for this repository.",
+      "layout": "full-view",
+      "encoding": {
+        "columns": [
+          {
+            "field": "workflow",
+            "type": "nominal",
+            "title": "Workflow",
+            "format": "workflow-relative-path"
+          },
+          {
+            "field": "workflow-role",
+            "type": "nominal",
+            "title": "Role"
+          },
+          {
+            "field": "workflow-active",
+            "type": "nominal",
+            "title": "State"
+          },
+          {
+            "field": "repository",
+            "type": "nominal",
+            "title": "Repository"
+          },
+          {
+            "field": "campaign-name",
+            "type": "nominal",
+            "title": "Campaign"
+          },
+          {
+            "field": "observed-at",
+            "type": "temporal",
+            "title": "Observed",
+            "format": "human-friendly-timestamp"
+          },
+          {
+            "field": "organization",
+            "type": "nominal",
+            "title": "Organization"
+          }
+        ]
+      }
+    }
+  ],
+  "pages": [
+    {
+      "id": "repositories",
+      "kind": "built-in",
+      "intent": "Determine which repository most needs CAO operational investigation.",
+      "subject": "Configured repositories and retained run/issue evidence for the selected horizon.",
+      "objective": "Prioritize repository-level health and usage review.",
+      "acceptance": "Preserve repository identity, run counts, issue states and observed AIC units; link repository detail. Inventory membership is not execution, authorized coverage or verified value.",
+      "page": "repositories",
+      "title": "Repositories",
+      "description": "Identify the repository with the strongest need for CAO operational investigation.",
+      "icon": "repo",
+      "class-name": "repositories-page",
+      "definition": {
+        "data-state": {
+          "availability": true
+        },
+        "views": [
+          {
+            "id": "repositories-runs",
+            "title": "Runs by repository",
+            "subject": "Registered repositories and distinct retained workflow run IDs in the selected horizon.",
+            "objective": "Compare repository execution volume and choose repositories for drill-down.",
+            "acceptance": "Show up to 100 repositories by run count descending with stable repository tie-breaks and drill links. Include zero retained runs without claiming inactivity; distinguish empty, partial, and unavailable evidence.",
+            "description": "Distinct retained runs per repository in the selected horizon, ranked by count directly from inventory and run evidence without waiting for imported event coverage. Shows up to 100 repositories; the Table view lists the full inventory. Zero means no retained runs, not confirmed inactivity.",
+            "data": {
+              "source": "repository-run-inventory",
+              "order-by": [
+                { "field": "runs", "direction": "desc" },
+                { "field": "repository", "direction": "asc" }
+              ],
+              "limit": 100
+            },
+            "mark": "chart",
+            "chart": "horizontal-bar",
+            "layout": "full",
+            "empty-message": "No repositories were retained in the current inventory.",
+            "encoding": {
+              "x": { "field": "repository", "type": "nominal", "title": "Repository" },
+              "y": { "field": "runs", "type": "quantitative", "title": "Runs" },
+              "href": { "field": "repository-link", "type": "nominal" }
+            }
+          },
+          {
+            "id": "repositories-issues",
+            "title": "Top repositories with issues",
+            "subject": "Compare retained issue safe outputs across the ten most represented repositories.",
+            "objective": "Identify repositories with issue activity that needs review.",
+            "acceptance": "The ranking describes retained issues, not all repository problems or their resolution.",
+            "description": "The share of retained issues attributed to the ten repositories with the most issue safe outputs.",
+            "data": {
+              "source": "issue-repository-totals"
+            },
+            "mark": "chart",
+            "chart": "pie",
+            "layout": "full",
+            "empty-message": "No issue safe outputs were retained in the current report.",
+            "encoding": {
+              "x": {
+                "field": "repository-coordinate",
+                "type": "nominal",
+                "title": "Repository"
+              },
+              "y": {
+                "field": "issues",
+                "type": "quantitative",
+                "title": "Issues"
+              }
+            }
+          },
+          {
+            "id": "repositories-activity",
+            "title": "Repositories",
+            "subject": "Repository execution health, retained outcomes, and AI Credit usage.",
+            "objective": "Compare repository-grain totals reduced before enrichment and choose drill-down targets.",
+            "acceptance": "Preserve repository identity, counts, links, filters, and evidence quality; unavailable activity is not a healthy or idle repository.",
+            "description": "Repository-local execution health and attributed outcomes, reduced before inventory enrichment.",
+            "data": {
+              "source": "repository-activity",
+              "partial-source": "repository-activity-preview"
+            },
+            "mark": "table",
+            "controls": "interactive",
+            "lazy-list": true,
+            "layout": "full-view",
+            "empty-message": "No repositories discovered.",
+            "encoding": {
+              "columns": [
+                {
+                  "field": "repository",
+                  "type": "nominal",
+                  "title": "Repository"
+                },
+                {
+                  "field": "runs",
+                  "type": "quantitative",
+                  "title": "Runs"
+                },
+                {
+                  "field": "ingestion",
+                  "type": "nominal",
+                  "title": "Ingestion %"
+                },
+                {
+                  "field": "failure-summary",
+                  "type": "nominal",
+                  "title": "Failure rate",
+                  "filter": false
+                },
+                {
+                  "field": "aic",
+                  "type": "quantitative",
+                  "title": "AIC",
+                  "unit": "aic"
+                },
+                {
+                  "field": "workflows",
+                  "type": "quantitative",
+                  "title": "AWs"
+                },
+                {
+                  "field": "status",
+                  "type": "nominal",
+                  "title": "Status",
+                  "display": "status"
+                }
+              ],
+              "href": {
+                "field": "repository-link",
+                "type": "nominal"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "repository-workflows",
+      "kind": "custom",
+      "intent": "Find the declared workflows belonging to the selected repository.",
+      "subject": "Workflow inventory matching the repository route parameter.",
+      "objective": "Locate authored workflows before inspecting their execution evidence.",
+      "acceptance": "Retain repository, workflow file and role identities and detail links. Distinguish declared inventory from observed runs and unavailable inventory from an empty result.",
+      "title": "Repository workflows",
+      "description": "Locate the selected repository's declared workflows for execution review.",
+      "icon": "workflow",
+      "route": {
+        "hash-query-parameter": "repository",
+        "navigation-page": "repositories"
+      },
+      "views": [
+        "repository-workflows"
+      ]
+    },
+    {
+      "id": "repository-detail",
+      "kind": "custom",
+      "intent": "Determine the selected repository's next operational investigation.",
+      "subject": "One routed repository, its authored workflows and retained runs in the selected horizon.",
+      "objective": "Choose one repository-specific workflow or run investigation.",
+      "acceptance": "Show workflow/run counts and AIC with scope and native health distinctions. Preserve missing cost and unavailable evidence; successful runs do not establish accepted outcomes.",
+      "title": "Repository",
+      "description": "Choose the next operational investigation for the selected repository.",
+      "icon": "repo",
+      "class-name": "repository-detail-page",
+      "query-binding": "page",
+      "route": {
+        "hash-query-parameter": "repository",
+        "navigation-page": "repositories",
+        "tab": "overview",
+        "tabs": [
+          {
+            "id": "overview",
+            "label": "Overview",
+            "icon": "repo",
+            "page": "repository-detail"
+          },
+          {
+            "id": "insights",
+            "label": "Insights",
+            "icon": "graph",
+            "page": "repository-insights"
+          },
+          {
+            "id": "workflows",
+            "label": "Workflows",
+            "icon": "workflow",
+            "page": "repository-workflow-inventory"
+          },
+          {
+            "id": "runs",
+            "label": "Runs",
+            "icon": "play",
+            "page": "repository-runs"
+          },
+          {
+            "id": "settings",
+            "label": "Settings",
+            "icon": "gear",
+            "page": "repository-settings"
+          }
+        ]
+      },
+      "views": [
+        {
+          "id": "repository-workflow-count",
+          "title": "Workflows",
+          "description": "Answers how many Agentic Workflows this repository declares.",
+          "data": {
+            "source": "repository-activity",
+            "route-field": "repository"
+          },
+          "mark": "metric",
+          "encoding": {
+            "value": {
+              "field": "workflows",
+              "type": "quantitative",
+              "aggregate": "max"
+            }
+          },
+          "layout": "third"
+        },
+        {
+          "id": "repository-run-count",
+          "title": "Runs",
+          "description": "Answers how many runs were observed for this repository.",
+          "data": {
+            "source": "repository-activity",
+            "route-field": "repository"
+          },
+          "mark": "metric",
+          "encoding": {
+            "value": {
+              "field": "runs",
+              "type": "quantitative",
+              "aggregate": "max"
+            }
+          },
+          "layout": "third"
+        },
+        {
+          "id": "repository-aic-total",
+          "title": "AI Credits",
+          "description": "Answers how many AI Credits this repository consumed.",
+          "data": {
+            "source": "repository-activity",
+            "route-field": "repository"
+          },
+          "mark": "metric",
+          "encoding": {
+            "value": {
+              "field": "aic",
+              "type": "quantitative",
+              "aggregate": "sum",
+              "unit": "aic"
+            }
+          },
+          "layout": "third"
+        },
+        {
+          "id": "repository-health-summary",
+          "title": "Repository health",
+          "description": "Answers whether this repository needs attention, how often its runs fail, and how complete its ingestion is.",
+          "data": {
+            "source": "repository-activity",
+            "route-field": "repository"
+          },
+          "mark": "table",
+          "controls": "static",
+          "empty-message": "No activity has been observed for this repository.",
+          "encoding": {
+            "columns": [
+              {
+                "field": "repository",
+                "type": "nominal",
+                "title": "Repository",
+                "display": "repository-link"
+              },
+              {
+                "field": "status",
+                "type": "nominal",
+                "title": "Status",
+                "display": "status"
+              },
+              {
+                "field": "failure-summary",
+                "type": "nominal",
+                "title": "Failures"
+              },
+              {
+                "field": "evaluated-workflows",
+                "type": "quantitative",
+                "title": "Evaluated workflows"
+              }
+            ],
+            "href": {
+              "field": "repository-link",
+              "type": "nominal"
+            }
+          },
+          "layout": "full"
+        }
+      ]
+    },
+    {
+      "id": "repository-insights",
+      "kind": "custom",
+      "intent": "Compare native run conclusions for the selected repository.",
+      "subject": "Retained runs for the routed repository in the selected horizon.",
+      "objective": "Identify execution-health patterns that warrant workflow-level investigation.",
+      "acceptance": "Group by native run conclusion and show counts with the selected time bounds. Do not substitute success for effectiveness or interpret missing runs as verified health.",
+      "title": "Repository",
+      "description": "Identify execution-health patterns in the selected repository that require workflow review.",
+      "icon": "graph",
+      "class-name": "repository-insights-page",
+      "route": {
+        "hash-query-parameter": "repository",
+        "navigation-page": "repositories",
+        "tab": "insights",
+        "tabs": [
+          {
+            "id": "overview",
+            "label": "Overview",
+            "icon": "repo",
+            "page": "repository-detail"
+          },
+          {
+            "id": "insights",
+            "label": "Insights",
+            "icon": "graph",
+            "page": "repository-insights"
+          },
+          {
+            "id": "workflows",
+            "label": "Workflows",
+            "icon": "workflow",
+            "page": "repository-workflow-inventory"
+          },
+          {
+            "id": "runs",
+            "label": "Runs",
+            "icon": "play",
+            "page": "repository-runs"
+          },
+          {
+            "id": "settings",
+            "label": "Settings",
+            "icon": "gear",
+            "page": "repository-settings"
+          }
+        ]
+      },
+      "views": [
+        {
+          "id": "repository-run-health",
+          "title": "Run health trend",
+          "subject": "Track this repository's daily observed run conclusions.",
+          "objective": "Identify days with failures or changes in run activity for investigation.",
+          "acceptance": "Any apparent trend is checked against underlying runs and data completeness.",
+          "description": "Daily run conclusions show this repository's execution health at a glance.",
+          "data": {
+            "source": "repository-runs",
+            "route-field": "repository-coordinate"
+          },
+          "mark": "chart",
+          "chart": "line",
+          "layout": "full",
+          "empty-message": "No runs have been observed for this repository.",
+          "encoding": {
+            "x": {
+              "field": "started-at",
+              "type": "temporal",
+              "format": "human-friendly-timestamp",
+              "time-unit": "day"
+            },
+            "y": {
+              "field": "run",
+              "type": "quantitative",
+              "aggregate": "count"
+            },
+            "color": {
+              "field": "run-conclusion",
+              "type": "nominal"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "repository-workflow-inventory",
+      "kind": "custom",
+      "intent": "Inspect which authored agentic workflows are registered for the selected repository.",
+      "subject": "Authored workflow inventory for the routed repository.",
+      "objective": "Navigate to workflow definitions and their retained execution evidence.",
+      "acceptance": "Show stable workflow file identity, repository ownership and detail links; distinguish inventory availability from execution activity. Registration alone does not establish a dispatch.",
+      "title": "Repository",
+      "description": "Inspect the selected repository's authored agentic workflow inventory.",
+      "icon": "workflow",
+      "class-name": "repository-workflow-inventory-page",
+      "route": {
+        "hash-query-parameter": "repository",
+        "navigation-page": "repositories",
+        "tab": "workflows",
+        "tabs": [
+          {
+            "id": "overview",
+            "label": "Overview",
+            "icon": "repo",
+            "page": "repository-detail"
+          },
+          {
+            "id": "insights",
+            "label": "Insights",
+            "icon": "graph",
+            "page": "repository-insights"
+          },
+          {
+            "id": "workflows",
+            "label": "Workflows",
+            "icon": "workflow",
+            "page": "repository-workflow-inventory"
+          },
+          {
+            "id": "runs",
+            "label": "Runs",
+            "icon": "play",
+            "page": "repository-runs"
+          },
+          {
+            "id": "settings",
+            "label": "Settings",
+            "icon": "gear",
+            "page": "repository-settings"
+          }
+        ]
+      },
+      "views": [
+        {
+          "id": "repository-authored-workflows",
+          "title": "Repository workflows",
+          "description": "All declared workflows belonging to this repository, with managed-campaign membership and observed execution totals.",
+          "data": {
+            "source": "workflow-inventory",
+            "route-field": "repository"
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "lazy-list": true,
+          "column-summaries": true,
+          "empty-message": "No workflows were observed for this repository.",
+          "encoding": {
+            "columns": [
+              {
+                "field": "workflow-name",
+                "type": "nominal",
+                "format": "workflow-relative-path",
+                "title": "Workflow"
+              },
+              {
+                "field": "workflow-role",
+                "type": "nominal",
+                "title": "Role"
+              },
+              {
+                "field": "campaign-name",
+                "type": "nominal",
+                "title": "Campaign"
+              },
+              {
+                "field": "rollout-mode",
+                "type": "nominal",
+                "title": "Mode",
+                "display": "mode"
+              },
+              {
+                "field": "workflow-active",
+                "type": "nominal",
+                "title": "State",
+                "display": "active-state"
+              },
+              {
+                "field": "aic",
+                "type": "quantitative",
+                "title": "AIC",
+                "unit": "aic"
+              },
+              {
+                "field": "runs",
+                "type": "quantitative",
+                "title": "Runs"
+              }
+            ],
+            "href": {
+              "field": "workflow-link",
+              "type": "nominal"
+            }
+          },
+          "layout": "full"
+        }
+      ]
+    },
+    {
+      "id": "repository-runs",
+      "kind": "custom",
+      "intent": "Find recent or problematic workflow runs in the selected repository.",
+      "subject": "Retained GitHub Actions runs for the routed repository and selected horizon.",
+      "objective": "Select concrete runs for execution investigation.",
+      "acceptance": "Preserve run/workflow identity, native status versus conclusion, timestamps and run links; honor repository and horizon filters and disclose partial/unavailable evidence.",
+      "title": "Repository",
+      "description": "Select a retained run from the selected repository for execution investigation.",
+      "icon": "play",
+      "class-name": "repository-runs-page",
+      "route": {
+        "hash-query-parameter": "repository",
+        "navigation-page": "repositories",
+        "tab": "runs",
+        "tabs": [
+          {
+            "id": "overview",
+            "label": "Overview",
+            "icon": "repo",
+            "page": "repository-detail"
+          },
+          {
+            "id": "insights",
+            "label": "Insights",
+            "icon": "graph",
+            "page": "repository-insights"
+          },
+          {
+            "id": "workflows",
+            "label": "Workflows",
+            "icon": "workflow",
+            "page": "repository-workflow-inventory"
+          },
+          {
+            "id": "runs",
+            "label": "Runs",
+            "icon": "play",
+            "page": "repository-runs"
+          },
+          {
+            "id": "settings",
+            "label": "Settings",
+            "icon": "gear",
+            "page": "repository-settings"
+          }
+        ]
+      },
+      "views": [
+        {
+          "id": "repository-run-table",
+          "title": "Runs",
+          "description": "Answers which recent runs in this repository succeeded, failed, or remain in progress.",
+          "data": {
+            "source": "repository-runs",
+            "route-field": "repository-coordinate"
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "lazy-list": true,
+          "empty-message": "No runs have been observed for this repository.",
+          "encoding": {
+            "columns": [
+              {
+                "field": "workflow",
+                "type": "nominal",
+                "format": "workflow-relative-path",
+                "title": "Workflow"
+              },
+              {
+                "field": "run",
+                "type": "nominal",
+                "title": "Run",
+                "display": "run-link"
+              },
+              {
+                "field": "run-status",
+                "type": "nominal",
+                "title": "Status",
+                "display": "status"
+              },
+              {
+                "field": "run-conclusion",
+                "type": "nominal",
+                "title": "Conclusion",
+                "display": "status"
+              },
+              {
+                "field": "rollout-mode",
+                "type": "nominal",
+                "title": "Mode",
+                "display": "mode"
+              },
+              {
+                "field": "started-at",
+                "type": "temporal",
+                "format": "human-friendly-timestamp",
+                "title": "Started"
+              }
+            ],
+            "href": {
+              "field": "run-link",
+              "type": "nominal"
+            },
+            "actions": [
+              {
+                "intent": "Open the precise GitHub Actions run page without executing an action.",
+                "presentation": "external-link",
+                "level": "explore",
+                "icon": "mark-github",
+                "label": "Open run on GitHub",
+                "context": [
+                  "run-link"
+                ]
+              }
+            ]
+          },
+          "layout": "full"
+        }
+      ]
+    },
+    {
+      "id": "repository-settings",
+      "kind": "custom",
+      "intent": "Review compiler provenance before considering maintenance for the selected repository.",
+      "subject": "Authored workflow compiler versions and maintenance controls for the routed repository.",
+      "objective": "Identify evidence-backed maintenance needs without silently performing updates.",
+      "acceptance": "Show observed version provenance and unknown states. Registration is not update confidence; refresh inventory when needed, and require explicit approval for operational commands.",
+      "title": "Repository",
+      "description": "Decide whether the selected repository's compiler provenance justifies maintenance.",
+      "icon": "gear",
+      "class-name": "repository-settings-page",
+      "route": {
+        "hash-query-parameter": "repository",
+        "navigation-page": "repositories",
+        "tab": "settings",
+        "tabs": [
+          {
+            "id": "overview",
+            "label": "Overview",
+            "icon": "repo",
+            "page": "repository-detail"
+          },
+          {
+            "id": "insights",
+            "label": "Insights",
+            "icon": "graph",
+            "page": "repository-insights"
+          },
+          {
+            "id": "workflows",
+            "label": "Workflows",
+            "icon": "workflow",
+            "page": "repository-workflow-inventory"
+          },
+          {
+            "id": "runs",
+            "label": "Runs",
+            "icon": "play",
+            "page": "repository-runs"
+          },
+          {
+            "id": "settings",
+            "label": "Settings",
+            "icon": "gear",
+            "page": "repository-settings"
+          }
+        ]
+      },
+      "views": [
+        {
+          "id": "repository-compiler-versions",
+          "title": "Compiler version",
+          "description": "Installed and current gh-aw compiler versions observed for this repository.",
+          "data": {
+            "source": "maintenance-repositories",
+            "route-field": "repository"
+          },
+          "mark": "table",
+          "controls": "static",
+          "empty-message": "No Agentic Workflows were observed for this repository.",
+          "encoding": {
+            "columns": [
+              {
+                "field": "gh-aw-version",
+                "type": "nominal",
+                "title": "Installed"
+              },
+              {
+                "field": "gh-aw-current-version",
+                "type": "nominal",
+                "title": "Latest"
+              },
+              {
+                "field": "upgrade-state",
+                "type": "nominal",
+                "title": "Upgrade",
+                "display": "status"
+              }
+            ],
+            "actions": [
+              {
+                "action": "upgrade-target-repository",
+                "when": {
+                  "field": "upgrade-action-visible",
+                  "equals": true
+                },
+                "presentation": "cli-action",
+                "level": "operate",
+                "icon": "download",
+                "label": "Update agentic workflows",
+                "context": [
+                  "repository"
+                ]
+              }
+            ]
+          },
+          "layout": "full"
+        }
+      ]
+    }
+  ]
+}

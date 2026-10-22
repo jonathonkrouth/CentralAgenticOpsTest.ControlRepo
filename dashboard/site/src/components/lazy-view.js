@@ -1,0 +1,366 @@
+import { createDebug } from '../debug.js';
+import { h } from '../dom.js';
+import { DASHBOARD_RENDER_EVENT, emitDashboardDebugEvent } from '../debug-events.js';
+import { renderSkeletonBars } from './ui-primitives.js';
+import { dispatchPageRoute } from './page-route.js';
+
+const debugLazyView = createDebug('lazy-view');
+
+const renderers = new WeakMap();
+const hydrationPromises = new WeakMap();
+const observers = new WeakMap();
+const scrollCleanups = new WeakMap();
+const activeTransitions = new WeakMap();
+const hydrationQueues = new WeakMap();
+const deferredHydrations = new WeakMap();
+
+/**
+ * @param {Document} document
+ * @param {unknown} transition
+ */
+export function trackViewTransition(document, transition) {
+  if (!transition || typeof transition !== 'object' || !('finished' in transition)) return;
+  const transitionRecord = /** @type {{ finished?: unknown, ready?: unknown, updateCallbackDone?: unknown }} */ (transition);
+  observeTransitionPromise(transitionRecord.ready);
+  observeTransitionPromise(transitionRecord.updateCallbackDone);
+  const finished = Promise.resolve(transitionRecord.finished).catch(() => {});
+  activeTransitions.set(document, finished);
+  void finished.then(() => {
+    if (activeTransitions.get(document) === finished) activeTransitions.delete(document);
+  });
+}
+
+/**
+ * @param {unknown} value
+ */
+function observeTransitionPromise(value) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return;
+  void Promise.resolve(value).catch((error) => {
+    if (isSkippedTransitionError(error)) return;
+    queueMicrotask(() => {
+      throw error;
+    });
+  });
+}
+
+/**
+ * @param {unknown} error
+ */
+function isSkippedTransitionError(error) {
+  if (!error || typeof error !== 'object') return false;
+  const transitionError = /** @type {{ name?: unknown, message?: unknown }} */ (error);
+  return transitionError.name === 'AbortError'
+    || typeof transitionError.message === 'string' && /skip/i.test(transitionError.message);
+}
+
+/**
+ * @param {{ label: string, headingLevel?: 'h2'|'h3'|'h4', minHeight?: number, render: () => HTMLElement | Promise<HTMLElement> }} options
+ * @returns {HTMLElement}
+ */
+export function renderLazyView({ label, headingLevel = 'h3', minHeight = 280, render }) {
+  const element = h(
+    'div',
+    {
+      className: 'dashboard-lazy-view',
+      role: 'region',
+      tabIndex: 0,
+      'aria-busy': 'true',
+      'aria-label': `Loading ${label}`,
+      dataset: { lazyView: '' },
+      style: `--dashboard-lazy-view-min-height: ${Math.max(1, minHeight)}px`
+    },
+    h(headingLevel, { className: 'sr-only' }, label),
+    h('span', { className: 'sr-only' }, `Loading ${label}`),
+    renderSkeletonBars('dashboard-lazy-view-skeleton')
+  );
+  renderers.set(element, render);
+  return element;
+}
+
+/**
+ * Starts viewport observation for lazy views below a rendered page.
+ * Browsers without IntersectionObserver render immediately.
+ * @param {HTMLElement} root
+ */
+export function enableLazyViews(root) {
+  disconnectLazyViews(root);
+  const lazyViews = [...root.querySelectorAll('[data-lazy-view]')]
+    .filter((element) => element instanceof HTMLElement);
+  if (lazyViews.length === 0) return;
+
+  const Observer = root.ownerDocument.defaultView?.IntersectionObserver;
+  if (typeof Observer !== 'function') {
+    for (const element of lazyViews) void hydrateLazyView(element, { immediate: true });
+    return;
+  }
+
+  const scrollContainer = root.closest('main.dashboard-prototype');
+  const observer = new Observer((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting && entry.intersectionRatio <= 0) continue;
+      observer.unobserve(entry.target);
+      if (entry.target instanceof HTMLElement) {
+        void hydrateLazyView(entry.target);
+      }
+    }
+  }, { root: scrollContainer, rootMargin: '320px 0px' });
+  observers.set(root, observer);
+  for (const element of lazyViews) {
+    observer.observe(element);
+    const disclosure = element.closest('details');
+    if (disclosure instanceof HTMLDetailsElement) {
+      const hydrateFromDisclosure = () => {
+        if (!disclosure.open) return;
+        observer.unobserve(element);
+        void hydrateLazyView(element);
+      };
+      disclosure.addEventListener('toggle', hydrateFromDisclosure);
+      disclosure.addEventListener('click', (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.closest('summary') !== disclosure.querySelector('summary')) return;
+        root.ownerDocument.defaultView?.setTimeout(hydrateFromDisclosure, 0);
+      });
+    }
+    element.addEventListener('focusin', () => {
+      observer.unobserve(element);
+      void hydrateLazyView(element);
+    }, { once: true });
+  }
+
+  const scrollTarget = scrollContainer ?? root.ownerDocument.scrollingElement;
+  if (scrollTarget) {
+    const hydrateReachedViews = () => {
+      const viewportBottom = scrollTarget.getBoundingClientRect().bottom;
+      for (const element of lazyViews) {
+        if (!element.parentNode || element.getBoundingClientRect().top > viewportBottom + 320) continue;
+        observer.unobserve(element);
+        void hydrateLazyView(element);
+      }
+    };
+    scrollTarget.addEventListener('scroll', hydrateReachedViews, { passive: true });
+    scrollCleanups.set(root, () => scrollTarget.removeEventListener('scroll', hydrateReachedViews));
+  }
+}
+
+/**
+ * @param {HTMLElement} root
+ */
+export function disconnectLazyViews(root) {
+  observers.get(root)?.disconnect();
+  observers.delete(root);
+  scrollCleanups.get(root)?.();
+  scrollCleanups.delete(root);
+  for (const element of root.querySelectorAll('[data-lazy-view]')) {
+    if (element instanceof HTMLElement) cancelLazyViewHydration(element);
+  }
+}
+
+/**
+ * Hydrates a newly revealed lazy view after its skeleton has had an opportunity to paint.
+ * @param {HTMLElement} element
+ * @returns {Promise<void>}
+ */
+export function hydrateLazyViewAfterPaint(element) {
+  cancelLazyViewHydration(element);
+  const controller = new AbortController();
+  deferredHydrations.set(element, controller);
+  const hydration = hydrateLazyView(element, { afterPaint: true, signal: controller.signal });
+  void hydration.finally(() => {
+    if (deferredHydrations.get(element) === controller) deferredHydrations.delete(element);
+  });
+  return hydration;
+}
+
+/** @param {HTMLElement} element */
+export function cancelLazyViewHydration(element) {
+  const controller = deferredHydrations.get(element);
+  if (!controller) return;
+  controller.abort();
+  deferredHydrations.delete(element);
+  hydrationPromises.delete(element);
+}
+
+/**
+ * @param {HTMLElement} element
+ * @param {{ immediate?: boolean, afterPaint?: boolean, signal?: AbortSignal }} [options]
+ * @returns {Promise<void>}
+ */
+function hydrateLazyView(element, { immediate = false, afterPaint = false, signal } = {}) {
+  const existing = hydrationPromises.get(element);
+  if (existing) return existing;
+
+  const render = renderers.get(element);
+  if (!render || !element.parentNode) return Promise.resolve();
+  const ownerDocument = element.ownerDocument;
+
+  if (immediate && !activeTransitions.has(ownerDocument)) {
+    const hydration = renderHydratedView(element, render);
+    hydrationPromises.set(element, hydration);
+    return hydration;
+  }
+
+  const hydration = queueHydration(ownerDocument, async () => {
+    if (afterPaint) await waitForPaint(ownerDocument);
+    if (signal?.aborted) return;
+    const transition = activeTransitions.get(ownerDocument);
+    if (transition) {
+      await transition;
+    }
+    if (signal?.aborted || !element.parentNode) return;
+    await renderHydratedView(element, render);
+  });
+
+  hydrationPromises.set(element, hydration);
+  return hydration;
+}
+
+/**
+ * @param {Document} ownerDocument
+ * @returns {Promise<void>}
+ */
+function waitForPaint(ownerDocument) {
+  const view = ownerDocument.defaultView;
+  return new Promise((resolve) => {
+    if (typeof view?.requestAnimationFrame === 'function') {
+      view.requestAnimationFrame(() => view.requestAnimationFrame(() => resolve()));
+    } else if (typeof view?.setTimeout === 'function') {
+      view.setTimeout(resolve, 0);
+    } else {
+      resolve();
+    }
+  });
+}
+
+/**
+ * @param {string | null} viewId
+ * @param {'started' | 'completed' | 'failed'} status
+ * @param {{ startedAt?: number, error?: unknown }} [context]
+ */
+function logLazyViewHydration(viewId, status, { startedAt, error } = {}) {
+  if (status === 'completed') {
+    debugLazyView({ viewId, status, durationMs: Date.now() - /** @type {number} */ (startedAt) });
+  } else if (status === 'failed') {
+    debugLazyView({ viewId, status, errorName: /** @type {{ name?: unknown }} */ (error)?.name ?? 'Error' });
+  } else {
+    debugLazyView({ viewId, status });
+  }
+}
+
+/**
+ * @param {HTMLElement} element
+ * @param {() => HTMLElement | Promise<HTMLElement>} render
+ * @returns {Promise<void>}
+ */
+function renderHydratedView(element, render) {
+  const detail = {
+    kind: 'lazy-view',
+    viewId: element.getAttribute('data-view-id'),
+    label: element.getAttribute('aria-label')?.replace(/^Loading /, '') ?? ''
+  };
+  const startedAt = Date.now();
+  emitDashboardDebugEvent(element.ownerDocument, DASHBOARD_RENDER_EVENT, { ...detail, status: 'started' });
+  logLazyViewHydration(detail.viewId, 'started');
+  try {
+    const rendered = render();
+    if (rendered instanceof HTMLElement) {
+      replaceLazyView(element, rendered);
+      emitDashboardDebugEvent(rendered.ownerDocument, DASHBOARD_RENDER_EVENT, { ...detail, status: 'completed' });
+      logLazyViewHydration(detail.viewId, 'completed', { startedAt });
+      return Promise.resolve();
+    }
+    return Promise.resolve(rendered)
+      .then((resolved) => {
+        replaceLazyView(element, resolved);
+        emitDashboardDebugEvent(resolved.ownerDocument, DASHBOARD_RENDER_EVENT, { ...detail, status: 'completed' });
+        logLazyViewHydration(detail.viewId, 'completed', { startedAt });
+      })
+      .catch((error) => {
+        reportHydrationError(element, error);
+        emitDashboardDebugEvent(element.ownerDocument, DASHBOARD_RENDER_EVENT, { ...detail, status: 'failed' });
+        logLazyViewHydration(detail.viewId, 'failed', { error });
+      });
+  } catch (error) {
+    reportHydrationError(element, error);
+    emitDashboardDebugEvent(element.ownerDocument, DASHBOARD_RENDER_EVENT, { ...detail, status: 'failed' });
+    logLazyViewHydration(detail.viewId, 'failed', { error });
+    return Promise.resolve();
+  }
+}
+
+/**
+ * Hydrates one view at a time so several offscreen views entering the viewport
+ * together render across separate tasks instead of one long, memory-heavy task.
+ * @param {Document} ownerDocument
+ * @param {() => Promise<void>} task
+ * @returns {Promise<void>}
+ */
+function queueHydration(ownerDocument, task) {
+  const pending = hydrationQueues.get(ownerDocument) ?? Promise.resolve();
+  const queued = pending.then(task, task);
+  hydrationQueues.set(ownerDocument, queued.then(
+    () => yieldBetweenHydrations(ownerDocument),
+    () => yieldBetweenHydrations(ownerDocument)
+  ));
+  return queued.catch((/** @type {unknown} */ error) => {
+    console.error(error);
+  });
+}
+
+/**
+ * @param {Document} ownerDocument
+ * @returns {Promise<void>}
+ */
+function yieldBetweenHydrations(ownerDocument) {
+  const view = ownerDocument.defaultView;
+  return new Promise((resolve) => {
+    if (typeof view?.setTimeout === 'function') view.setTimeout(resolve, 0);
+    else resolve();
+  });
+}
+
+/**
+ * @param {HTMLElement} element
+ * @param {HTMLElement} rendered
+ */
+function replaceLazyView(element, rendered) {
+  if (!element.parentNode) return;
+  const page = element.closest('.dashboard-page');
+  const restoreFocus = element.ownerDocument.activeElement === element;
+  const viewId = element.getAttribute('data-view-id');
+  if (viewId && !rendered.hasAttribute('data-view-id')) {
+    rendered.setAttribute('data-view-id', viewId);
+  }
+  for (const attribute of element.getAttributeNames()) {
+    if ((attribute.startsWith('data-view-') || attribute.startsWith('data-section-') || attribute === 'data-disclosure')
+        && !rendered.hasAttribute(attribute)) {
+      rendered.setAttribute(attribute, element.getAttribute(attribute) ?? '');
+    }
+  }
+  if (element.classList.contains('custom-view')) rendered.classList.add('custom-view');
+  element.replaceWith(rendered);
+  if (page instanceof HTMLElement && page.dataset.routeParameter) {
+    dispatchPageRoute(rendered, page.dataset.routeParameter, page.dataset.routeValue ?? '');
+  }
+  if (restoreFocus) {
+    if (!rendered.hasAttribute('tabindex') && rendered.tabIndex < 0) {
+      rendered.tabIndex = -1;
+    }
+    rendered.focus();
+  }
+}
+
+/**
+ * @param {HTMLElement} element
+ * @param {unknown} error
+ */
+function reportHydrationError(element, error) {
+  if (error instanceof Error && error.name === 'AbortError' && !element.isConnected) return;
+  console.error(error);
+  if (!element.parentNode) return;
+  element.setAttribute('aria-busy', 'false');
+  const label = element.getAttribute('aria-label')?.replace(/^Loading /, '') || 'view';
+  element.setAttribute('aria-label', `Unable to load ${label}`);
+  const status = element.querySelector('span.sr-only');
+  if (status) status.textContent = `Unable to load ${label}`;
+}

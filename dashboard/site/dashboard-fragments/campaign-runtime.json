@@ -1,0 +1,593 @@
+{
+  "queries": [
+    {
+      "name": "campaign-performance-baseline-totals",
+      "subject": "Establish a selected-horizon campaign baseline from concluded run attempts while keeping reliability, unverified production, and efficiency as separate facts.",
+      "objective": "Select campaigns whose retained run reliability, output production, or AI Credit efficiency merits closer examination.",
+      "acceptance": "Concluded and successful attempts, outputs, and mean AI Credits reconcile to filtered retained runs; absent denominators or costs stay unknown. Produced outputs are unverified, not operational value.",
+      "description": "Canonical campaign run attempts aggregated into bounded selected-horizon baseline totals without treating runtime success or produced outputs as operational value.",
+      "from": "campaign-runs",
+      "compute": [
+        {
+          "as": "run-attempt-identity",
+          "function": "concat",
+          "args": [
+            {
+              "field": "run"
+            },
+            {
+              "value": ":"
+            },
+            {
+              "field": "run-attempt"
+            }
+          ]
+        },
+        {
+          "as": "positive-aic",
+          "function": "greater-than",
+          "args": [{ "field": "aic-total" }, { "value": 0 }]
+        }
+      ],
+      "aggregate": {
+        "by": [
+          "campaign"
+        ],
+        "values": [
+          {
+            "field": "run-attempt-identity",
+            "as": "concluded-runs",
+            "reducer": "count",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "status",
+                  "in": [
+                    "success",
+                    "failure",
+                    "cancelled",
+                    "timed-out",
+                    "action-required",
+                    "neutral",
+                    "skipped",
+                    "stale",
+                    "startup-failure"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "field": "run-attempt-identity",
+            "as": "successful-runs",
+            "reducer": "count",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "status",
+                  "equals": "success"
+                }
+              ]
+            }
+          },
+          {
+            "field": "safe-items-count",
+            "as": "runs-with-output-evidence",
+            "reducer": "count",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "status",
+                  "equals": "success"
+                }
+              ]
+            }
+          },
+          {
+            "field": "safe-items-count",
+            "as": "produced-outputs",
+            "reducer": "sum",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "status",
+                  "equals": "success"
+                }
+              ]
+            }
+          },
+          {
+            "field": "aic-total",
+            "as": "aic-per-successful-run",
+            "reducer": "mean",
+            "filter": {
+              "predicates": [
+                {
+                  "field": "status",
+                  "equals": "success"
+                },
+                {
+                  "field": "positive-aic",
+                  "equals": true
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "campaign-performance-baseline",
+      "subject": "Turn each campaign's selected-horizon baseline totals into deterministic reliability and production signals with an explicit successful-run efficiency fact.",
+      "objective": "Decide which campaign baseline signal needs run- or output-level verification next.",
+      "acceptance": "Success-rate and signal labels follow the retained totals and their explicit denominators; no concluded attempts or output evidence is distinguished from zero verified impact, and AI Credits per successful run remain a separate cost fact rather than a value score.",
+      "description": "A bounded, explainable baseline that distinguishes runtime reliability, unverified output production, and AI Credit efficiency.",
+      "from": "campaign-performance-baseline-totals",
+      "compute": [
+        {
+          "as": "success-rate",
+          "function": "quotient",
+          "args": [
+            {
+              "field": "successful-runs"
+            },
+            {
+              "field": "concluded-runs"
+            }
+          ]
+        },
+        {
+          "as": "success-rate-display",
+          "function": "format-percent",
+          "args": [
+            {
+              "field": "success-rate"
+            }
+          ]
+        },
+        {
+          "as": "success-rate-percent",
+          "function": "product",
+          "args": [
+            {
+              "field": "success-rate"
+            },
+            {
+              "value": 100
+            }
+          ]
+        },
+        {
+          "as": "has-concluded-runs",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "concluded-runs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "has-unsuccessful-runs",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "concluded-runs"
+            },
+            {
+              "field": "successful-runs"
+            }
+          ]
+        },
+        {
+          "as": "observed-reliability-signal",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-unsuccessful-runs"
+            },
+            {
+              "value": "Unsuccessful runs observed"
+            },
+            {
+              "value": "No unsuccessful runs observed"
+            }
+          ]
+        },
+        {
+          "as": "reliability-signal",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-concluded-runs"
+            },
+            {
+              "field": "observed-reliability-signal"
+            },
+            {
+              "value": "No concluded runs observed"
+            }
+          ]
+        },
+        {
+          "as": "has-output-evidence",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "runs-with-output-evidence"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "has-produced-outputs",
+          "function": "greater-than",
+          "args": [
+            {
+              "field": "produced-outputs"
+            },
+            {
+              "value": 0
+            }
+          ]
+        },
+        {
+          "as": "observed-production-signal",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-produced-outputs"
+            },
+            {
+              "value": "Outputs produced; acceptance unverified"
+            },
+            {
+              "value": "No outputs observed"
+            }
+          ]
+        },
+        {
+          "as": "production-signal",
+          "function": "if",
+          "args": [
+            {
+              "field": "has-output-evidence"
+            },
+            {
+              "field": "observed-production-signal"
+            },
+            {
+              "value": "Output evidence unavailable"
+            }
+          ]
+        }
+      ],
+      "select": [
+        {
+          "field": "campaign"
+        },
+        {
+          "field": "concluded-runs"
+        },
+        {
+          "field": "successful-runs"
+        },
+        {
+          "field": "success-rate"
+        },
+        {
+          "field": "success-rate-display"
+        },
+        {
+          "field": "success-rate-percent"
+        },
+        {
+          "field": "reliability-signal"
+        },
+        {
+          "field": "produced-outputs"
+        },
+        {
+          "field": "production-signal"
+        },
+        {
+          "field": "aic-per-successful-run"
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "id": "campaign-runs",
+      "kind": "custom",
+      "intent": "Inspect run conclusions, failure reasons and failed dispatches for the selected campaign.",
+      "subject": "Retained campaign runs and dispatch evidence in the selected horizon.",
+      "objective": "Find concrete runtime problems before proposing repairs.",
+      "acceptance": "Preserve run identity, native status/conclusion, recorded failure reason and source links; distinguish dispatch failure from worker failure. Disclose partial evidence and avoid inferring causes from counts.",
+      "title": "Campaign",
+      "description": "Identify the selected campaign run that most requires investigation.",
+      "icon": "play",
+      "class-name": "campaign-runs-page",
+      "route": {
+        "hash-query-parameter": "campaign",
+        "title-format": "title-case",
+        "tabs-class-name": "campaign-tabs",
+        "tabs": [
+          {
+            "id": "insights",
+            "label": "Insights",
+            "icon": "graph",
+            "page": "campaign-insights"
+          },
+          {
+            "id": "problems",
+            "label": "Failures",
+            "icon": "alert",
+            "page": "campaign-problems"
+          },
+          {
+            "id": "issues",
+            "label": "Reports",
+            "icon": "issue-opened",
+            "page": "campaign-issues"
+          },
+          {
+            "id": "memory",
+            "label": "Memory",
+            "icon": "archive",
+            "page": "campaign-memory"
+          }
+        ]
+      },
+      "views": [
+        {
+          "id": "campaign-run-navigation",
+          "title": "Campaign workflow runs",
+          "data": {
+            "sources": [
+              "workflows",
+              "campaign-insight-tab-counts",
+              "campaign-problem-tab-counts",
+              "campaign-issue-tab-counts"
+            ],
+            "arguments": [
+              {
+                "name": "campaign",
+                "field": "campaign"
+              }
+            ]
+          },
+          "mark": "element",
+          "element": "campaign-route",
+          "layout": "full",
+          "config": {
+            "body": "runs"
+          }
+        },
+        {
+          "id": "campaign-run-status",
+          "title": "Workflow run status",
+          "subject": "See the distribution of observed run statuses for this campaign.",
+          "objective": "Identify failed or stalled campaign runs that merit inspection.",
+          "acceptance": "Any concerning status is checked against the underlying runs; an empty chart is not treated as proof of healthy execution.",
+          "description": "Observed workflow conclusions provide the campaign's leading execution signal.",
+          "data": {
+            "source": "campaign-runs",
+            "route-field": "campaign"
+          },
+          "mark": "chart",
+          "chart": "pie",
+          "layout": "full",
+          "empty-message": "No workflow runs were observed for this campaign in the current run window.",
+          "encoding": {
+            "x": {
+              "field": "status",
+              "type": "nominal",
+              "title": "Status"
+            },
+            "y": {
+              "field": "started-at",
+              "type": "quantitative",
+              "aggregate": "count",
+              "title": "Runs"
+            }
+          }
+        },
+        {
+          "id": "campaign-failure-reason-distribution",
+          "title": "Why these dispatches failed",
+          "subject": "Compare retained failure reasons for this campaign's dispatches.",
+          "objective": "Prioritize which failed dispatches need investigation.",
+          "acceptance": "A prioritized reason is supported by the linked dispatch evidence; missing reasons remain unknown.",
+          "description": "Grouped by the strongest failure reason retained for each dispatch. Select a reason in the table below to open its GitHub Actions evidence.",
+          "data": {
+            "source": "dispatches",
+            "route-field": "campaign",
+            "filters": {
+              "status": [
+                "failure",
+                "startup-failure",
+                "timed-out",
+                "stale"
+              ]
+            },
+            "order-by": [
+              {
+                "field": "count-status-detail",
+                "direction": "desc"
+              }
+            ]
+          },
+          "mark": "chart",
+          "chart": "pie",
+          "empty-message": "No failed workflow dispatch runs were observed for this campaign in the current run window.",
+          "encoding": {
+            "x": {
+              "field": "status-detail",
+              "type": "nominal",
+              "title": "Failure reason"
+            },
+            "y": {
+              "field": "status-detail",
+              "type": "quantitative",
+              "aggregate": "count",
+              "title": "Failed dispatches"
+            }
+          },
+          "layout": "full"
+        },
+        {
+          "id": "campaign-failed-dispatch-table",
+          "disclosure-label": "Failed dispatches",
+          "description": "Failure reasons first. Open a reason for the GitHub Actions run, or copy a debug prompt with retained context.",
+          "data": {
+            "source": "dispatches",
+            "route-field": "campaign",
+            "filters": {
+              "status": [
+                "failure",
+                "startup-failure",
+                "timed-out",
+                "stale"
+              ]
+            }
+          },
+          "mark": "table",
+          "disclosure": "supplemental",
+          "controls": "interactive",
+          "empty-message": "No failed workflow dispatch runs were observed for this campaign in the current run window.",
+          "encoding": {
+            "href": {
+              "field": "run-link",
+              "type": "nominal"
+            },
+            "columns": [
+              {
+                "field": "status-detail",
+                "type": "nominal",
+                "title": "Why"
+              },
+              {
+                "field": "started-at",
+                "type": "temporal",
+                "format": "human-friendly-timestamp",
+                "title": "Started"
+              },
+              {
+                "field": "workflow-name",
+                "type": "nominal",
+                "format": "workflow-relative-path",
+                "title": "Workflow"
+              },
+              {
+                "field": "run-title",
+                "type": "nominal",
+                "title": "Run title"
+              },
+              {
+                "field": "runtime-repository",
+                "type": "nominal",
+                "title": "Runtime repository"
+              }
+            ],
+            "actions": [
+              {
+                "intent": "Open the precise GitHub Actions run page without executing an action.",
+                "presentation": "external-link",
+                "level": "explore",
+                "icon": "mark-github",
+                "label": "Open run on GitHub",
+                "context": [
+                  "run-link"
+                ]
+              },
+              {
+                "action": "create-agent-task",
+                "intent": "Debug this failed workflow dispatch. Explain the retained failure reason, verify it against the linked GitHub Actions run, and propose the safest next action.",
+                "presentation": "copy-prompt",
+                "level": "explore",
+                "icon": "search",
+                "label": "Review debug prompt",
+                "context": [
+                  "campaign",
+                  "status",
+                  "status-detail",
+                  "started-at",
+                  "workflow-name",
+                  "run-title",
+                  "runtime-repository",
+                  "run-link"
+                ]
+              }
+            ]
+          },
+          "layout": "full"
+        },
+        {
+          "id": "campaign-run-table",
+          "disclosure-label": "All workflow runs",
+          "disclosure": "supplemental",
+          "description": "Workflow runs attributed to this campaign, ordered newest first.",
+          "data": {
+            "source": "campaign-runs",
+            "route-field": "campaign"
+          },
+          "mark": "table",
+          "controls": "interactive",
+          "empty-message": "No workflow runs were observed for this campaign in the current run window.",
+          "encoding": {
+            "href": {
+              "field": "run-link",
+              "type": "nominal"
+            },
+            "columns": [
+              {
+                "field": "started-at",
+                "type": "temporal",
+                "format": "human-friendly-timestamp",
+                "title": "Started"
+              },
+              {
+                "field": "dispatch-type",
+                "type": "nominal",
+                "title": "Type"
+              },
+              {
+                "field": "workflow-name",
+                "type": "nominal",
+                "format": "workflow-relative-path",
+                "title": "Workflow"
+              },
+              {
+                "field": "run-title",
+                "type": "nominal",
+                "title": "Run title"
+              },
+              {
+                "field": "runtime-repository",
+                "type": "nominal",
+                "title": "Runtime repository"
+              },
+              {
+                "field": "status",
+                "type": "nominal",
+                "title": "Status",
+                "display": "status"
+              },
+              {
+                "field": "status-detail",
+                "type": "nominal",
+                "title": "Why"
+              }
+            ]
+          },
+          "layout": "full"
+        }
+      ]
+    }
+  ]
+}
