@@ -673,7 +673,6 @@ jobs:
           path: ${{ runner.temp }}/cao-activity
 
       - name: Verify activity snapshot
-        id: verify-snapshot
         run: |
           snapshot_root="$RUNNER_TEMP/cao-activity"
           mkdir -p "$snapshot_root/gh-aw-logs-shards" "$snapshot_root/gh-aw-logs-runs" "$snapshot_root/gh-aw-logs-records"
@@ -686,20 +685,13 @@ jobs:
             echo "Activity snapshot file is missing or empty: drain3_weights.json" >&2
             missing=1
           fi
-          for phase in runs records; do
+          for phase in shards runs records; do
             find "$snapshot_root/gh-aw-logs-$phase" -maxdepth 1 -type f -name '*.jsonl' -print -quit | grep -q . \
               || { echo "Activity snapshot contains no $phase shards" >&2; missing=1; }
           done
           [[ "$missing" -eq 0 ]] || { echo "Refusing to publish an incomplete activity cache" >&2; exit 1; }
-          if find "$snapshot_root/gh-aw-logs-shards" -maxdepth 1 -type f -name '*.jsonl' -print -quit | grep -q .; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::No raw activity shards were collected; skipping cache publication."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Save activity cache
-        if: ${{ steps.verify-snapshot.outputs.publish == 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
