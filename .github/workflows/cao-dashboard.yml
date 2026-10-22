@@ -213,6 +213,8 @@ jobs:
         with:
           script: |
             const path = require('path')
+            const { mkdir } = require('fs/promises')
+            await mkdir(process.env.REPORT_GH_AW_LOGS_SHARDS, { recursive: true })
             await exec.exec(process.execPath, [
               'activity/cao.mjs', 'recycle-cache',
               '--input-dir', process.env.REPORT_GH_AW_LOGS_SHARDS,
