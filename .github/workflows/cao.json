@@ -12,18 +12,18 @@
     "campaigns": {
       "dapper-migration": {
         "icon": "code",
-        "mode": "review",
+        "mode": "live",
         "max-repositories": 3,
         "rollout-percent": 100,
         "targets": {
           "jonathonkrouth/CentralAgenticOpsTest.Repo1": {
-            "mode": "review"
+            "mode": "live"
           },
           "jonathonkrouth/CentralAgenticOpsTest.Repo2": {
-            "mode": "review"
+            "mode": "live"
           },
           "jonathonkrouth/CentralAgenticOpsTest.Repo3": {
-            "mode": "review"
+            "mode": "live"
           }
         },
         "workers": {
